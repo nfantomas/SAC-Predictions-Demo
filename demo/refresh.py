@@ -1,0 +1,100 @@
+import argparse
+import json
+import os
+from typing import Dict
+
+from config import ConfigError, load_config
+from pipeline.cache import CacheError, CacheMeta, build_meta, load_cache, save_cache
+from sac_connector.export import ExportError, export_all, normalize_rows
+
+
+def _parse_params(raw: str) -> Dict[str, str]:
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("SAC_EXPORT_PARAMS must be valid JSON.") from exc
+    if not isinstance(data, dict):
+        raise ValueError("SAC_EXPORT_PARAMS must be a JSON object.")
+    return {str(k): str(v) for k, v in data.items()}
+
+
+def refresh_from_sac(output_path: str) -> tuple[str, CacheMeta]:
+    config = load_config()
+
+    export_url = os.getenv("SAC_EXPORT_URL", "").strip()
+    if not export_url:
+        raise ConfigError("Missing required env var: SAC_EXPORT_URL")
+
+    params = _parse_params(os.getenv("SAC_EXPORT_PARAMS", ""))
+    date_field = os.getenv("SAC_DATE_FIELD", "date")
+    value_field = os.getenv("SAC_VALUE_FIELD", "value")
+    dim_fields_raw = os.getenv("SAC_DIM_FIELDS", "")
+    dim_fields = [dim.strip() for dim in dim_fields_raw.split(",") if dim.strip()]
+    grain = os.getenv("SAC_TIME_GRAIN", "month")
+
+    rows = export_all(config, export_url, params=params)
+    normalized = normalize_rows(
+        rows,
+        date_field=date_field,
+        value_field=value_field,
+        dim_fields=dim_fields,
+        grain=grain,
+    )
+    if not normalized:
+        raise ExportError("No rows returned from SAC export.")
+    columns = list(normalized[0].keys()) if normalized else []
+    normalized_sorted = sorted(
+        normalized,
+        key=lambda r: tuple(r.get(col, "") for col in columns),
+    )
+    meta = build_meta(normalized_sorted, source="sac")
+    save_cache(normalized_sorted, meta, data_path=output_path)
+    return output_path, meta
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Refresh cached dataset from SAC.")
+    parser.add_argument("--source", default="sac", choices=["sac"])
+    parser.add_argument("--output", default="data/cache/sac_export.csv")
+    args = parser.parse_args()
+
+    if args.source != "sac":
+        raise SystemExit("Only --source sac is supported for M0.")
+
+    try:
+        output, meta = refresh_from_sac(args.output)
+    except ExportError as exc:
+        try:
+            _, meta = load_cache(data_path=args.output)
+        except CacheError as cache_exc:
+            print(str(exc))
+            print(str(cache_exc))
+            return 1
+        warning = (
+            "WARNING: SAC refresh failed; using cached data from "
+            f"{meta.last_refresh_time}."
+        )
+        print(warning)
+        print(
+            "CACHE_META "
+            f"source={meta.source} row_count={meta.row_count} "
+            f"min_date={meta.min_date} max_date={meta.max_date}"
+        )
+        return 0
+    except (ConfigError, ValueError) as exc:
+        print(str(exc))
+        return 1
+
+    print(f"OK wrote {output}")
+    print(
+        "CACHE_META "
+        f"source={meta.source} row_count={meta.row_count} "
+        f"min_date={meta.min_date} max_date={meta.max_date}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
