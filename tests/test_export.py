@@ -1,5 +1,5 @@
 import types
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sac_connector import export as export_module
 
@@ -24,7 +24,7 @@ def test_pagination_combines_rows(monkeypatch):
             access_token="token",
             token_type="Bearer",
             expires_in=3600,
-            obtained_at=datetime.utcnow(),
+            obtained_at=datetime.now(timezone.utc),
         ),
     )
 

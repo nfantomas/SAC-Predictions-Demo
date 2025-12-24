@@ -21,138 +21,171 @@
 ## Milestone M0 — Setup & Access (DONE)
 Complete.
 
----
-
 ## Milestone M1 — Dataset Binding + MCP Baseline (DONE)
 Complete.
 
-Confirmed demo provider coordinates:
-- NamespaceID: `sac`
-- ProviderID: `C6a0bs069fpsb2as72454aoh2v`
-- ProviderName: `NICOLAS COPY_PLAN_HR_HC_PLANNING`
-
-Locked demo series (agreed target):
-- Metric: `SignedData`
-- Slice: `Version=public.Actual`, `GLaccount=FTE`, `DataSource=Basis`, other dims = `#`
-- Aggregation: **SUM by month**
-- Grain: monthly (`Date` in `YYYYMM`)
+## Milestone M2 — Baseline Forecast (10y) (DONE/IN QA)
+(Complete once QA signs off.)
 
 ---
 
-## Milestone M2 — Baseline Forecast (10y) (CURRENT)
-**Milestone goal:** produce a deterministic 10-year baseline forecast from the cached normalized time series with robust fallbacks and clear test coverage.
+## Milestone M3 — Scenarios (3–5 presets) (NEXT)
+**Milestone goal:** generate 3–5 explainable scenario series derived from the baseline forecast and persist them as artifacts for UI/MCP use.
 
-### M2 Task List
+### Scenario model (must be implemented as documented)
+Scenarios are **overlays on the baseline forecast** (`yhat`), not re-fitting models.
 
-#### M2-01 — Implement baseline forecaster (ETS) with fallback (damped CAGR)
+Parameters (all optional; defaults = 0 / None):
+- `growth_delta_pp`: float (percentage points). Adds a constant delta to monthly growth rate.
+- `shock_year`: int (e.g., 2027) or None.
+- `shock_pct`: float (e.g., -0.08 for -8%). Applied as a **level multiplier** to all months in `shock_year` and onward (i.e., permanent step change from that year).
+- `drift_pp_per_year`: float. Adds a linear drift to growth over time (converted to monthly drift = drift_pp_per_year / 12).
+
+Rules:
+- Scenario series starts at the **first forecast month** (month after last actual) and spans the same horizon as baseline.
+- Non-negativity: final scenario values are clipped at 0.0 (documented).
+- Deterministic: no randomness.
+
+Presets (minimum required):
+- `base`: all params = 0/None
+- `downside_trade_war`: shock + negative growth delta (values to be finalized and documented)
+- `upside`: positive growth delta (values to be finalized and documented)
+Optional (if quick):
+- `aging_drift`: negative drift_pp_per_year
+- `recovery`: short-term shock then partial rebound (only if explicitly implemented; otherwise omit)
+
+---
+
+### M3 Task List
+
+#### M3-01 — Implement scenario overlay engine
 - **Status:** DONE
 - **Owner (Dev):** Data/ML Dev (Python)
 - **QA:** QA Engineer
-- **Description:** Implement baseline forecasting that prefers ETS/Exponential Smoothing on monthly data and falls back to damped CAGR when history is insufficient or model fit fails.
-- **Deliverable:**
-  - `forecast/baseline.py` with API:
-    - `run_baseline(series_df, horizon_months=120, method="auto") -> forecast_df`
-  - Forecast output schema (minimum):
-    - `date` (ISO, monthly, first of month)
-    - `yhat` (float)
-    - optional: `yhat_lower`, `yhat_upper` (if cheap to compute; otherwise omit)
+- **Description:** Implement the scenario overlay math that converts a baseline forecast series into a scenario series using the parameter model above.
+- **Deliverable:** `scenarios/overlay.py` with API:
+  - `apply_scenario(baseline_df, params, scenario_name) -> scenario_df`
+  - `apply_presets(baseline_df, presets_dict) -> scenarios_df`
 - **Definition of done:**
-  - `method="auto"` selects ETS when:
-    - data is monthly and has >= 24 points (or documented threshold), else uses CAGR fallback.
-  - Forecast length = **120 months** (10 years) starting the month after last observed date.
-  - Deterministic outputs (no randomness, stable results across runs with same input).
-  - Headcount-safe default: forecast values are **not negative** (clip at 0 or enforce constraint; document behavior).
-  - Clear error handling: when ETS fails, logs a single-line reason and uses fallback (no hard crash).
+  - Inputs:
+    - `baseline_df` contains columns `date` (ISO) and `yhat` (float) for **forecast horizon only**.
+  - Outputs:
+    - `scenario_df` contains `date`, `scenario`, `yhat`
+    - `scenarios_df` contains concatenated results for multiple scenarios
+  - Overlay behavior matches the documented rules:
+    - growth_delta_pp adjusts monthly growth consistently
+    - shock_year applies a permanent level multiplier from the first month of that year onward
+    - drift applies monthly linear growth adjustment
+  - Values are clipped at 0.0 and the clipping is unit-tested.
 - **What to test (QA):**
   - Unit tests (offline):
-    - Auto selection: 12 points → fallback chosen; 36 points → ETS chosen.
-    - Output length and date continuity (monthly increments, correct start date).
-    - Non-negativity behavior (if clipping is implemented).
-    - ETS failure path triggers fallback (simulate by passing degenerate data).
-  - Regression test:
-    - On fixture dataset, forecast first 3 `yhat` values remain within an expected tolerance range (to catch accidental behavior changes).
+    - With a synthetic baseline (known growth), verify growth_delta shifts results as expected.
+    - Shock behavior: dates before shock_year unchanged; dates from shock_year onward multiplied by (1 + shock_pct).
+    - Drift: later months diverge more than earlier months with correct sign.
+    - Non-negativity clipping works for extreme negative shocks.
+    - Determinism: repeated calls produce identical outputs.
 
 ---
 
-#### M2-02 — Add forecast runner + artifacts (save to cache with metadata)
+#### M3-02 — Define scenario presets (3 required, up to 5) and document them
+- **Status:** DONE
+- **Owner (Dev):** Product/Backend Dev
+- **QA:** QA Lead
+- **Description:** Create a small set of scenario presets with customer-friendly names and fixed parameter values. Keep them explainable.
+- **Deliverable:**
+  - `scenarios/presets.py` (or `scenarios/presets.yaml` if preferred) defining:
+    - `base`, `downside_trade_war`, `upside` (+ optional `aging_drift`, `recovery`)
+  - `docs/scenarios.md` describing each preset and its parameter values
+- **Definition of done:**
+  - At least 3 presets exist and are used by code.
+  - Each preset has:
+    - name, short description, parameter dict, and intended “story” (1–2 lines)
+  - `docs/scenarios.md` includes a table with exact parameter values and the rule interpretation (shock permanence, drift meaning).
+- **What to test (QA):**
+  - Documentation review: presets in docs match presets in code exactly.
+  - Unit: loading presets returns required keys and correct types (floats/ints/None).
+
+---
+
+#### M3-03 — Add scenario runner + artifacts (save to cache with metadata)
 - **Status:** DONE
 - **Owner (Dev):** Backend Dev (Integration)
-- **QA:** QA Lead
-- **Description:** Add a runnable path that loads the cached normalized series, computes the baseline forecast, and writes forecast artifacts to `data/cache/` with metadata for UI use.
+- **QA:** QA Engineer
+- **Description:** Load baseline forecast artifacts, generate scenario series for presets, and write scenario artifacts to cache for UI/MCP.
 - **Deliverable:**
-  - `pipeline/forecast_runner.py` (or similar) that:
-    - loads normalized cache (`date`, `value`)
-    - calls `forecast.run_baseline(...)`
-    - writes `data/cache/forecast.parquet` (or `.csv`) + `data/cache/forecast_meta.json`
-  - `demo/forecast.py` runnable: `python -m demo.forecast`
+  - `pipeline/scenario_runner.py` that:
+    - loads `data/cache/forecast.*`
+    - applies presets
+    - writes `data/cache/scenarios.parquet` (or `.csv`) + `data/cache/scenarios_meta.json`
+  - `demo/scenarios.py` runnable: `python -m demo.scenarios`
 - **Definition of done:**
-  - `python -m demo.forecast`:
+  - `python -m demo.scenarios`:
     - exits 0 on success
-    - prints: input row count, min/max date, forecast horizon, and output path
-  - If series cache missing/corrupt:
-    - exits non-zero with actionable message: “Run `python -m demo.refresh --source sac` first.”
+    - prints: number of scenarios, rows per scenario, min/max date
+  - If forecast artifacts missing/corrupt:
+    - exits non-zero with actionable message: “Run `python -m demo.forecast` first.”
   - Metadata includes:
-    - `generated_at`, `horizon_months`, `method_used`, `input_min_date`, `input_max_date`, `output_min_date`, `output_max_date`
+    - `generated_at`, `presets` (names + params), `horizon_months`, `output_min_date`, `output_max_date`
 - **What to test (QA):**
-  - Integration (offline using fixture cache):
-    - run refresh (fixture mode) → run forecast → artifacts created and readable
+  - Integration (offline using fixture cache + forecast):
+    - run forecast → run scenarios → artifacts created and readable
   - Negative:
-    - delete cache → forecast command fails with actionable message
+    - delete forecast artifacts → scenarios command fails with actionable message
   - Idempotency:
-    - rerun forecast twice → same number of rows; dates identical; no duplicate rows
+    - rerun scenarios twice → same row counts and dates
 
 ---
 
-#### M2-03 — Add `demo.run` one-command demo path (refresh → forecast) with safe fallbacks
+#### M3-04 — Extend MCP server to expose baseline forecast + scenarios (read-only from cache)
 - **Status:** DONE
 - **Owner (Dev):** Backend Dev (Platform)
-- **QA:** QA Engineer
-- **Description:** Provide a single “happy path” entrypoint for demos that refreshes from SAC (or uses cache on failure) and then produces forecast artifacts.
-- **Deliverable:** `demo/run.py` runnable as `python -m demo.run`
-- **Definition of done:**
-  - `python -m demo.run` performs:
-    1) refresh from SAC (or cache fallback) with summary print
-    2) baseline forecast generation with summary print
-  - If SAC is down but cache exists:
-    - run still succeeds using cached series.
-  - If SAC is down and cache missing:
-    - run exits non-zero with clear remediation steps.
-- **What to test (QA):**
-  - Integration (requires SAC):
-    - with valid creds: run completes end-to-end
-  - Integration (offline):
-    - with fixture cache present: run completes and generates forecast
-  - Failure simulation:
-    - set invalid secret + existing cache → run completes using cache and prints warning
-
----
-
-#### M2-04 — Document baseline forecasting assumptions + outputs
-- **Status:** DONE
-- **Owner (Dev):** Data/ML Dev (Python)
 - **QA:** QA Lead
-- **Description:** Document what the baseline forecast does, when it switches to fallback, and how to interpret outputs.
-- **Deliverable:** `docs/forecast.md`
+- **Description:** Add allow-listed tools that serve cached forecast and scenario outputs so UI/clients can query without re-running computations.
+- **Deliverable:** MCP server updates adding tools:
+  - `get_forecast(from_cache: bool=True)` → returns baseline forecast series
+  - `get_scenarios(from_cache: bool=True, scenario: str|None=None)` → returns all scenarios or one scenario
 - **Definition of done:**
-  - Document includes:
-    - input contract (`date`, `value`) and required grain (monthly)
-    - method selection rules + thresholds
-    - non-negativity behavior
-    - output artifact locations + schema
-    - quick “verify forecast” checklist (row counts, date ranges)
+  - Server lists new tools and they return quickly from cache.
+  - Default is cache-only; refreshing (if supported) requires explicit flag and uses existing runners.
+  - Inputs are validated:
+    - unknown scenario name → clear error listing valid scenario names
 - **What to test (QA):**
-  - Documentation review: steps match actual CLI behavior
-  - Smoke: follow doc on clean checkout and generate forecast artifacts (fixture mode)
+  - Integration:
+    - generate forecast + scenarios → start MCP server
+    - call `get_forecast(from_cache=True)` → returns rows
+    - call `get_scenarios(from_cache=True, scenario="base")` → returns rows only for base
+    - call with invalid scenario → returns error + valid scenario list
 
 ---
 
-## Milestone Exit Criteria (M2)
-- Baseline forecast (120 months) can be generated from cached normalized series
-- Fallback logic prevents hard failures and is tested
-- One-command demo path exists (`python -m demo.run`)
-- All M2 tasks are `DONE` with QA sign-off
+#### M3-05 — Add a scenario comparison smoke path
+- **Status:** DONE
+- **Owner (Dev):** QA Engineer (Automation) or Backend Dev
+- **QA:** QA Lead
+- **Description:** Add a quick smoke command that verifies the end-to-end chain up to scenarios using fixture mode.
+- **Deliverable:** `demo/smoke_scenarios.py` runnable as `python -m demo.smoke_scenarios`
+- **Definition of done:**
+  - Command runs:
+    1) refresh (fixture) → forecast → scenarios
+    2) prints `SCENARIOS SMOKE OK`
+  - Verifies:
+    - at least 3 scenarios exist
+    - scenario output dates match baseline forecast dates exactly
+- **What to test (QA):**
+  - Offline on clean checkout:
+    - `pytest -q`
+    - `python -m demo.smoke_scenarios` prints `SCENARIOS SMOKE OK`
+
+---
+
+## Milestone Exit Criteria (M3)
+- ≥ 3 scenario series generated from baseline forecast
+- Scenario artifacts written to cache and readable
+- MCP exposes forecast + scenarios (read-only by default)
+- Smoke path validates refresh → forecast → scenarios (fixture mode)
+- All M3 tasks are `DONE` with QA sign-off
 
 ---
 
 ## Change Log (roadmap-impacting updates only)
-- 2025-12-24: Started M2 forecasting milestone (ETS + damped CAGR fallback) and added demo run entrypoint.
+- 2025-12-24: Added M3 scenario milestone tasks (overlay model + presets + artifacts + MCP read tools).

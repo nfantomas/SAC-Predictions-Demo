@@ -24,6 +24,8 @@ poetry run python -m demo.refresh --source fixture
 poetry run python -m demo.query
 poetry run python -m demo.forecast
 poetry run python -m demo.run
+poetry run python -m demo.scenarios
+poetry run python -m demo.smoke_scenarios
 poetry run ruff check .
 ```
 

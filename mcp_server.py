@@ -9,6 +9,9 @@ from urllib.parse import urlparse
 from config import load_config
 from demo.refresh import refresh_from_sac
 from pipeline.cache import CacheError, load_cache
+from pipeline.forecast_runner import run_forecast
+from pipeline.scenario_runner import run_scenarios
+from scenarios.presets import PRESETS
 
 
 DEFAULT_CACHE_PATH = "data/cache/sac_export.csv"
@@ -72,6 +75,38 @@ def get_timeseries(
     return {"rows": filtered, "meta": asdict(meta)}
 
 
+def _load_csv(path: str) -> List[Dict[str, str]]:
+    with open(path, "r", encoding="utf-8") as handle:
+        lines = handle.read().strip().splitlines()
+    if not lines:
+        raise CacheError("Cache is missing or empty.")
+    header = lines[0].split(",")
+    rows = []
+    for line in lines[1:]:
+        values = line.split(",")
+        rows.append(dict(zip(header, values)))
+    return rows
+
+
+def get_forecast(from_cache: bool = True) -> Dict[str, Any]:
+    if not from_cache:
+        run_forecast()
+    rows = _load_csv("data/cache/forecast.csv")
+    return {"rows": rows}
+
+
+def get_scenarios(from_cache: bool = True, scenario: Optional[str] = None) -> Dict[str, Any]:
+    if not from_cache:
+        run_scenarios()
+    rows = _load_csv("data/cache/scenarios.csv")
+    if scenario:
+        if scenario not in PRESETS:
+            valid = sorted(PRESETS.keys())
+            raise ValueError(f"Unknown scenario '{scenario}'. Valid: {', '.join(valid)}")
+        rows = [row for row in rows if row.get("scenario") == scenario]
+    return {"rows": rows}
+
+
 def _tool_list() -> Dict[str, Any]:
     return {
         "tools": [
@@ -87,6 +122,21 @@ def _tool_list() -> Dict[str, Any]:
                     "from_cache": "bool (default true)",
                     "start": "YYYY-MM-DD (optional)",
                     "end": "YYYY-MM-DD (optional)",
+                },
+            },
+            {
+                "name": "get_forecast",
+                "description": "Return baseline forecast from cache (or refresh on demand).",
+                "input_schema": {
+                    "from_cache": "bool (default true)",
+                },
+            },
+            {
+                "name": "get_scenarios",
+                "description": "Return scenario series from cache (or refresh on demand).",
+                "input_schema": {
+                    "from_cache": "bool (default true)",
+                    "scenario": "string (optional)",
                 },
             },
         ]
@@ -131,6 +181,17 @@ class MCPHandler(BaseHTTPRequestHandler):
                 start = payload.get("start")
                 end = payload.get("end")
                 result = get_timeseries(from_cache=from_cache, start=start, end=end)
+                self._send_json(200, result)
+                return
+            if path == "/get_forecast":
+                from_cache = bool(payload.get("from_cache", True))
+                result = get_forecast(from_cache=from_cache)
+                self._send_json(200, result)
+                return
+            if path == "/get_scenarios":
+                from_cache = bool(payload.get("from_cache", True))
+                scenario = payload.get("scenario")
+                result = get_scenarios(from_cache=from_cache, scenario=scenario)
                 self._send_json(200, result)
                 return
             if path == "/tools":

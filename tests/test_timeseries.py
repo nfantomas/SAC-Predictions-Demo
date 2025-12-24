@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pandas as pd
@@ -12,7 +12,7 @@ def _mock_token():
         access_token="token",
         token_type="Bearer",
         expires_in=3600,
-        obtained_at=datetime.utcnow(),
+        obtained_at=datetime.now(timezone.utc),
     )
 
 

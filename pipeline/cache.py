@@ -2,7 +2,7 @@ import csv
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Tuple
 
 
@@ -87,7 +87,7 @@ def build_meta(rows: List[Dict], source: str) -> CacheMeta:
     if not dates:
         raise CacheError("Cache metadata failed: missing date values.")
     return CacheMeta(
-        last_refresh_time=datetime.utcnow().isoformat() + "Z",
+        last_refresh_time=datetime.now(timezone.utc).isoformat(),
         source=source,
         row_count=len(rows),
         min_date=min(dates),
