@@ -74,17 +74,53 @@ def refresh_from_sac(output_path: str) -> tuple[str, CacheMeta]:
     return output_path, meta
 
 
+def _refresh_from_fixture(output_path: str) -> str:
+    fixture_path = "tests/fixtures/sample_series.csv"
+    if not os.path.exists(fixture_path):
+        raise ExportError("Fixture missing: tests/fixtures/sample_series.csv")
+    with open(fixture_path, "r", encoding="utf-8") as handle:
+        lines = handle.read().strip().splitlines()
+    if len(lines) < 2:
+        raise ExportError("Fixture is empty. Check tests/fixtures/sample_series.csv.")
+
+    header = lines[0].split(",")
+    rows = []
+    for line in lines[1:]:
+        values = line.split(",")
+        rows.append(dict(zip(header, values)))
+
+    normalized = normalize_rows(
+        rows,
+        date_field="date",
+        value_field="value",
+        dim_fields=["dim_region"],
+        grain="month",
+    )
+    if not normalized:
+        raise ExportError("No rows returned from fixture dataset.")
+
+    columns = list(normalized[0].keys()) if normalized else []
+    normalized_sorted = sorted(
+        normalized,
+        key=lambda r: tuple(r.get(col, "") for col in columns),
+    )
+    meta = build_meta(normalized_sorted, source="fixture")
+    save_cache(normalized_sorted, meta, data_path=output_path)
+    return output_path
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Refresh cached dataset from SAC.")
-    parser.add_argument("--source", default="sac", choices=["sac"])
+    parser.add_argument("--source", default="sac", choices=["sac", "fixture"])
     parser.add_argument("--output", default="data/cache/sac_export.csv")
     args = parser.parse_args()
 
-    if args.source != "sac":
-        raise SystemExit("Only --source sac is supported for M0.")
-
     try:
-        output, meta = refresh_from_sac(args.output)
+        if args.source == "fixture":
+            output = _refresh_from_fixture(args.output)
+            _, meta = load_cache(data_path=args.output)
+        else:
+            output, meta = refresh_from_sac(args.output)
     except ExportError as exc:
         try:
             _, meta = load_cache(data_path=args.output)

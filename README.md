@@ -20,7 +20,10 @@ poetry run pytest -q
 poetry run python -m demo.auth_check
 poetry run python -m demo.des_check
 poetry run python -m demo.refresh --source sac
+poetry run python -m demo.refresh --source fixture
 poetry run python -m demo.query
+poetry run python -m demo.forecast
+poetry run python -m demo.run
 poetry run ruff check .
 ```
 

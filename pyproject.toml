@@ -5,7 +5,7 @@ description = "SAC Predictions Demo"
 authors = [{ name = "SAC Demo Team", email = "devnull@example.com" }]
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["pandas>=2.2.0"]
+dependencies = ["pandas>=2.2.0", "statsmodels>=0.14.0"]
 
 [tool.poetry]
 package-mode = false

@@ -15,3 +15,10 @@
 - Wired refresh to the locked slice with cache metadata and fallback messaging.
 - Added minimal MCP server with health and get_timeseries endpoints.
 - Added demo.query CLI summary for cached data.
+
+## Milestone M2 — Baseline Forecast (10y)
+- Implemented ETS baseline with damped CAGR fallback and deterministic outputs.
+- Added forecast runner + CLI with cache artifacts and metadata.
+- Added one-command demo path (refresh → forecast) with cache fallback.
+- Documented forecast assumptions and verification checklist.
+- Added fixture-based refresh path for offline forecast QA.
