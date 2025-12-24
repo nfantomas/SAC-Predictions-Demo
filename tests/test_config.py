@@ -24,6 +24,8 @@ def test_logging_masks_secret(caplog):
         client_id="client-id",
         client_secret="supersecret",
         dataexport_base_url="https://example.export",
+        namespace_id="sac",
+        provider_id="provider",
     )
     caplog.set_level(logging.INFO)
     logging.getLogger("test").info("Loaded config: %s", safe_config_summary(config))

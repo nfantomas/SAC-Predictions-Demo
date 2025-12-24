@@ -7,3 +7,11 @@
 - Implemented cache layer with metadata and cache fallback behavior.
 - Defined data contract and fixture dataset with fixture-based tests.
 - Added tooling: Poetry config, lockfile, smoke test, lint/test commands, and Makefile.
+
+## Milestone M1 — Dataset Binding + MCP Baseline
+- Documented locked slice query for the SAC provider and aggregation rule.
+- Implemented timeseries fetch with pagination, dedup, and retries.
+- Added strict normalization and SAC-specific contract mapping.
+- Wired refresh to the locked slice with cache metadata and fallback messaging.
+- Added minimal MCP server with health and get_timeseries endpoints.
+- Added demo.query CLI summary for cached data.

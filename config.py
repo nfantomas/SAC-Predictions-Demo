@@ -62,6 +62,8 @@ class Config:
     client_id: str
     client_secret: str
     dataexport_base_url: Optional[str]
+    namespace_id: Optional[str]
+    provider_id: Optional[str]
 
 
 def safe_config_summary(config: Config) -> Dict[str, str]:
@@ -72,6 +74,8 @@ def safe_config_summary(config: Config) -> Dict[str, str]:
         "SAC_CLIENT_ID": config.client_id,
         "SAC_CLIENT_SECRET": mask_secret(config.client_secret),
         "SAC_DATAEXPORT_BASE_URL": config.dataexport_base_url or "",
+        "SAC_NAMESPACE_ID": config.namespace_id or "",
+        "SAC_PROVIDER_ID": config.provider_id or "",
     }
 
 
@@ -85,6 +89,8 @@ def load_config(env_path: str = ".env") -> Config:
         "SAC_CLIENT_ID": os.getenv("SAC_CLIENT_ID", ""),
         "SAC_CLIENT_SECRET": os.getenv("SAC_CLIENT_SECRET", ""),
         "SAC_DATAEXPORT_BASE_URL": os.getenv("SAC_DATAEXPORT_BASE_URL", ""),
+        "SAC_NAMESPACE_ID": os.getenv("SAC_NAMESPACE_ID", ""),
+        "SAC_PROVIDER_ID": os.getenv("SAC_PROVIDER_ID", ""),
     }
 
     missing = _missing_required(
@@ -107,4 +113,6 @@ def load_config(env_path: str = ".env") -> Config:
         client_id=env["SAC_CLIENT_ID"],
         client_secret=env["SAC_CLIENT_SECRET"],
         dataexport_base_url=env["SAC_DATAEXPORT_BASE_URL"] or None,
+        namespace_id=env["SAC_NAMESPACE_ID"] or None,
+        provider_id=env["SAC_PROVIDER_ID"] or None,
     )

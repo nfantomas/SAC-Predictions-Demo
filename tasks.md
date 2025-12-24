@@ -3,12 +3,9 @@
 ## Workflow (rules)
 - **Developers only take tasks listed here.** New work = new task in this file.
 - Each task has: **Owner (Dev)** → **PR** → **QA (review + tests)** → **Done**.
-- QA verifies:
-  - unit tests where applicable
-  - integration test / smoke run (end-to-end where relevant)
-  - definition of done met
-- **Milestone gating:** Only when all tasks in a milestone are **DONE** do we start the next milestone (by adding the next milestone section and tasks).
-- **Roadblocks:** If any task is blocked by a missing assumption/constraint/API limitation, update **roadmap.md** (scope/architecture/risks) and note the change in the **Change Log** below.
+- QA verifies unit + integration/smoke checks and the **Definition of done**.
+- **Milestone gating:** Only when all tasks in a milestone are **DONE** do we start the next milestone by adding the next milestone section.
+- **Roadblocks:** If blocked by missing constraints or SAC limitations, update **roadmap.md** and record it in **Change Log**.
 
 ---
 
@@ -21,201 +18,149 @@
 
 ---
 
-## Milestone M0 — Setup & Access (Connectivity proven)
-**Milestone goal:** SAC OAuth access works and a small dataset can be pulled reliably (even before UI/forecast).
+## Milestone M0 — Setup & Access (DONE)
+All M0 tasks are complete and verified (OAuth client credentials + DES access + provider discovery).
 
-### M0 Task List
-
-#### M0-01 — Create SAC OAuth client & permissions checklist
-- **Status:** DONE
-- **Owner (Dev):** Dev Lead (Integration)
-- **QA:** QA Lead
-- **Description:** Define the exact SAC access prerequisites: OAuth client creation, required roles/scopes, tenant URL formats, and the precise export endpoint(s) used for the demo.
-- **Deliverable:** `docs/access.md` with step-by-step checklist + “known-good” configuration values (placeholders, no secrets).
-- **Definition of done:**
-  - Document allows a second engineer to configure access on a fresh tenant without additional context.
-  - Includes: required SAC roles/permissions, auth/token endpoint(s), base URL patterns, and export endpoint(s) used by code.
-  - Includes a short “common failures” section (401/403/404/429) with likely causes.
-
-**What to test (QA):**
-- Documentation test: follow `docs/access.md` from scratch and confirm you can obtain a token and call a “whoami”/test endpoint (or export endpoint with minimal query).
-- Repo scan: verify no secrets are committed (grep for `client_secret`, `Authorization:` strings).
+Known-good demo provider:
+- NamespaceID: `sac`
+- ProviderID: `C6a0bs069fpsb2as72454aoh2v`
+- ProviderName: `NICOLAS COPY_PLAN_HR_HC_PLANNING`
 
 ---
 
-#### M0-02 — Implement token acquisition (client credentials) + secure config loading
+## Milestone M1 — Dataset Binding + MCP Baseline (CURRENT)
+**Milestone goal:** reliably pull a single time series from the chosen SAC provider, cache it, and expose it via a minimal MCP server for easy querying.
+
+### M1 Task List
+
+#### M1-01 — Lock the “demo slice” query (select + filter + orderby) and document it
+- **Status:** DONE
+- **Owner (Dev):** Backend Dev (Integration)
+- **QA:** QA Lead
+- **Description:** Define a stable, minimal query that returns a single useful time series from the provider (avoid huge dimensional exports). Prefer `$select=Date,<measure>` + `$filter=` fixed members + `$orderby=Date asc`.
+- **Deliverable:** `docs/dataset_binding.md` containing:
+  - Provider coordinates (NamespaceID, ProviderID)
+  - Final query string (copy/paste curl-ready)
+  - Explanation of chosen measure and filter members
+  - Aggregation rule (e.g., sum by Date after filtering)
+- **Definition of done:**
+  - Document contains one “known-good” query that returns **> 24 months** of data (or explains actual history).
+  - Query uses `$select` and `$filter` (no full FactData dumps).
+  - Aggregation rule is explicit and justified (sum vs avg).
+- **What to test (QA):**
+  - Run the curl query from `docs/dataset_binding.md` and confirm:
+    - HTTP 200
+    - `value` has rows
+    - Dates span multiple periods
+  - Spot-check that filters match the intended members (e.g., Version, GLaccount, DataSource, `#` members).
+
+---
+
+#### M1-02 — Implement `fetch_timeseries()` using the locked slice + pagination
 - **Status:** DONE
 - **Owner (Dev):** Backend Dev (Python)
 - **QA:** QA Engineer
-- **Description:** Implement OAuth client-credentials token flow and config loading from environment variables (with optional `.env` for local).
-- **Deliverable:** `sac_connector/auth.py`, `demo/auth_check.py`, `config.py`, `.env.example`
+- **Description:** Implement a dedicated function that pulls the locked dataset slice, handles pagination/next links, and returns a dataframe with raw SAC fields.
+- **Deliverable:** `sac_connector/timeseries.py` with:
+  - `fetch_timeseries(provider_id, namespace_id="sac", ...)`
+  - support for `$top` paging until done (or until max_rows limit)
+  - safe timeouts + retries (reuse existing retry helper)
 - **Definition of done:**
-  - `python -m demo.auth_check` prints `OK` + token expiry timestamp.
-  - Missing/invalid env vars produce actionable errors (which variable, expected format).
-  - No secrets are printed to logs (masking applied).
-
-**What to test (QA):**
-- Unit tests (offline):
-  - Config validation: missing env var → raises `ConfigError` with clear message.
-  - Logging: ensure secret values are masked (assert log output does not contain secret).
-- Integration (requires SAC):
-  - With valid env vars: `python -m demo.auth_check` exits code 0 and shows expiry.
-  - With invalid secret: exits non-zero and prints a single-line actionable error.
+  - Function returns a dataframe with at least `Date` and selected measure column.
+  - Pagination returns complete results (no duplicates due to paging logic).
+  - Errors are actionable (include HTTP code + endpoint; no token/secret leakage).
+- **What to test (QA):**
+  - Unit tests with mocked HTTP:
+    - two-page response merges correctly and deduplicates by full row signature
+    - retry behavior on 429/5xx
+  - Integration:
+    - run function against real tenant → row count > 0 and stable between runs
 
 ---
 
-#### M0-03 — Implement minimal SAC export pull (small dataset) + pagination/retry
-- **Status:** DONE
-- **Owner (Dev):** Backend Dev (Integration)
-- **QA:** QA Engineer
-- **Description:** Implement a minimal data pull that fetches a small time series from SAC export API with basic filters and chosen grain.
-- **Deliverable:** `sac_connector/export.py`, `demo/refresh.py` writing normalized cache to `data/cache/`
-- **Definition of done:**
-  - `python -m demo.refresh --source sac` completes end-to-end after env config.
-  - Supports pagination if API returns continuation/next links.
-  - Retries transient errors (429/5xx) with exponential backoff + max attempts.
-  - Output schema normalized to columns:
-    - `date` (ISO, aligned to grain)
-    - `value` (float)
-    - optional `dim_*` (string)
-  - Outputs are deterministic and idempotent (rerun does not duplicate rows).
-
-**What to test (QA):**
-- Unit tests (offline with mocked HTTP):
-  - Pagination: mock 2-page response → combined rows count equals sum.
-  - Retry: simulate 429 then 200 → succeeds and sleeps/backoff invoked (mock time).
-  - Normalization: input payload → output dataframe has required columns + correct dtypes.
-- Integration (requires SAC):
-  - Run: `python -m demo.refresh --source sac` → file created + row count > 0.
-  - Rerun immediately → row count unchanged (no duplicates) and latest date stable.
-
----
-
-#### M0-04 — Cache layer (read/write) + “use cache on failure” behavior
-- **Status:** DONE
-- **Owner (Dev):** Backend Dev (Data)
-- **QA:** QA Engineer
-- **Description:** Add cache API so demos don’t depend on SAC availability. Cache should store dataset + metadata.
-- **Deliverable:** `pipeline/cache.py` + fallback logic in `demo/refresh.py`
-- **Definition of done:**
-  - Cache supports `save_cache(df, meta)` and `load_cache()` returning both.
-  - Metadata includes: `last_refresh_time`, `source`, `row_count`, `min_date`, `max_date`.
-  - If SAC pull fails, refresh uses last cache and emits a clear warning message (stdout + UI-ready string).
-
-**What to test (QA):**
-- Unit tests (offline):
-  - Save then load → dataframe equality (values + schema) and metadata fields present.
-  - Corrupt/empty cache → load raises clear error with remediation steps.
-- Integration:
-  - Populate cache once.
-  - Break SAC auth (set bad secret) and run refresh → succeeds using cache + emits warning.
-
----
-
-#### M0-05 — Define demo dataset contract + sample dataset fixture
+#### M1-03 — Normalize to strict contract (ISO date + float value) and aggregate by month
 - **Status:** DONE
 - **Owner (Dev):** Data Dev (Python)
+- **QA:** QA Engineer
+- **Description:** Convert SAC `Date` (e.g., `YYYYMM`) to ISO date, coerce measure to float, and aggregate by month after filtering. Output columns: `date`, `value`, optional dims if needed.
+- **Deliverable:** `pipeline/normalize_timeseries.py` + update `docs/data_contract.md` for this SAC dataset.
+- **Definition of done:**
+  - Output dataframe has columns `date` (YYYY-MM-DD) and `value` (float).
+  - Aggregation rule implemented exactly as documented in `docs/dataset_binding.md`.
+  - Deterministic output across repeated pulls (same filter + same cache).
+- **What to test (QA):**
+  - Unit:
+    - `YYYYMM` parsing works and rejects invalid formats
+    - aggregation produces one row per month
+  - Integration:
+    - run end-to-end pull + normalize → verify min/max date and no missing required fields
+
+---
+
+#### M1-04 — Wire `demo.refresh` to the locked series + cache outputs + metadata
+- **Status:** DONE
+- **Owner (Dev):** Backend Dev (Integration)
 - **QA:** QA Lead
-- **Description:** Formalize data contract and provide a fixture for offline development and repeatable tests.
-- **Deliverable:** `docs/data_contract.md`, `tests/fixtures/sample_series.csv`
+- **Description:** Make `python -m demo.refresh --source sac` use the timeseries pipeline and write cache + metadata (last refresh, row count, min/max date).
+- **Deliverable:** updated `demo/refresh.py` + cache artifact in `data/cache/` (gitignored)
 - **Definition of done:**
-  - Contract specifies required fields, grain rules, allowed dims, and missing-value policy.
-  - Fixture conforms to contract and passes normalization pipeline.
-  - Tests can run without SAC using fixture only.
-
-**What to test (QA):**
-- Documentation review: contract matches actual output of `demo.refresh` normalization.
-- Unit test: fixture loads → normalization produces valid schema and no NaNs in required fields.
+  - `python -m demo.refresh --source sac` produces cached normalized dataset and metadata.
+  - If SAC fails, it falls back to last cache and warns.
+  - If SAC returns empty series, it exits non-zero with a clear message pointing to `docs/dataset_binding.md`.
+- **What to test (QA):**
+  - Integration:
+    - success path (SAC ok) creates/updates cache and prints summary
+    - failure path (bad token) falls back to cache with warning
+    - empty-series path (temporarily change filter) fails with actionable error
 
 ---
 
-#### M0-06 — Repo bootstrap: lint, formatting, tests, and one-command smoke run
+#### M1-05 — Add a minimal MCP server exposing `health` and `get_timeseries`
 - **Status:** DONE
-- **Owner (Dev):** DevOps Dev (Python Tooling)
+- **Owner (Dev):** Backend Dev (Platform)
 - **QA:** QA Engineer
-- **Description:** Establish minimal engineering hygiene so later milestones are fast and safe.
-- **Deliverable:** dependency management (`pyproject.toml` or `requirements.txt`), `pytest` setup, linter/formatter (e.g., ruff), `demo/smoke.py`, optional CI workflow.
+- **Description:** Implement a minimal MCP server exposing allow-listed tools only:
+  - `health()` → returns tenant URL + provider ID + cache status (no secrets)
+  - `get_timeseries(from_cache: bool=True, start: str|None=None, end: str|None=None)` → returns normalized series (and optionally refreshes if requested)
+- **Deliverable:** `mcp_server/` (or `mcp_server.py`) runnable via:
+  - `python -m mcp_server` (or documented command)
+  - includes README snippet showing how to connect a client (tool listing)
 - **Definition of done:**
-  - `pytest` passes locally using fixture dataset (no SAC needed).
-  - `python -m demo.smoke` runs end-to-end: load fixture → normalize → save cache → print `SMOKE OK`.
-  - Lint/format command documented in README and runs cleanly.
-
-**What to test (QA):**
-- Run commands on a clean checkout:
-  - `python -m venv .venv && pip install -r requirements.txt` (or equivalent)
-  - `pytest -q` → all green
-  - `python -m demo.smoke` → outputs `SMOKE OK`
-- If CI present: open PR → confirm checks run and pass.
-
----
-
-## Milestone Exit Criteria (M0)
-- Token check passes against SAC tenant using OAuth client credentials.
-- Refresh pulls a real SAC dataset and writes a normalized cached dataset.
-- Offline fixture mode supports repeatable tests (no SAC required).
-- All M0 tasks are `DONE` with QA sign-off.
+  - Server starts and lists tools reliably.
+  - `health` returns quickly (<1s from cache).
+  - `get_timeseries` returns data from cache by default; optional refresh requires explicit flag.
+  - Strict allow-list: no arbitrary URL fetching or raw query execution.
+- **What to test (QA):**
+  - Unit:
+    - tool handlers validate inputs (date formats, max range)
+  - Integration:
+    - start server, call `health`, call `get_timeseries(from_cache=True)` → returns rows
+    - call `get_timeseries(from_cache=False)` → triggers refresh once and returns rows
 
 ---
 
-# Task Definition — Poetry + Virtual Environment Setup
-
-Copy-paste this task into `tasks.md` under Milestone **M0** (or replace parts of M0-06 if you want to merge tooling tasks).
-
----
-
-#### M0-07 — Add Poetry dependency management + local venv workflow
+#### M1-06 — Add `demo.query` CLI for quick verification
 - **Status:** DONE
-- **Owner (Dev):** DevOps Dev (Python Tooling)
-- **QA:** QA Engineer
-- **Description:** Standardize Python dependency management with **Poetry** and ensure developers can create and use an isolated **virtual environment** consistently (prefer in-project `.venv`). This must support offline test runs using the fixture dataset and be compatible with later Docker packaging.
-- **Deliverable:**
-  - `pyproject.toml` (Poetry project definition)
-  - `poetry.lock`
-  - `.env.example` retained (Poetry must not require secrets to install)
-  - `README.md` updates: install + venv + run commands
-  - Optional but recommended: `Makefile` or `scripts/dev.sh` with common commands
-
+- **Owner (Dev):** Backend Dev (Python)
+- **QA:** QA Lead
+- **Description:** Provide a tiny CLI that loads cached data and prints a one-screen summary (row count, min/max date, basic stats).
+- **Deliverable:** `demo/query.py` runnable as `python -m demo.query`
 - **Definition of done:**
-  - A clean checkout can be set up with exactly:
-    - `poetry --version` (Poetry installed)
-    - `poetry config virtualenvs.in-project true`
-    - `poetry install`
-  - Project creates/uses a local venv at `./.venv/` (or clearly documented alternative if not feasible).
-  - The following commands work from the Poetry environment:
-    - `poetry run pytest -q` (offline, uses fixtures only)
-    - `poetry run python -m demo.smoke` prints `SMOKE OK`
-  - Dependency groups are organized (at minimum):
-    - `main` (runtime)
-    - `dev` (test/lint tooling)
-  - No dependency installation step requires SAC credentials or network calls beyond standard package install.
-  - All new commands are documented in `README.md` with copy-paste snippets.
+  - CLI prints: row count, min/max date, first/last 3 rows, mean/median, and missing-value check.
+  - Exits non-zero with actionable message if cache missing/corrupt.
+- **What to test (QA):**
+  - Offline: run after cache exists → prints summary
+  - Negative: delete cache → confirms error message is clear
 
-**What to test (QA):**
-- On a clean machine/clean checkout (no prior venv):
-  1) `poetry config virtualenvs.in-project true`
-  2) `poetry install`
-  3) Verify `.venv/` directory exists
-  4) `poetry run pytest -q` → all tests pass (no SAC required)
-  5) `poetry run python -m demo.smoke` → outputs `SMOKE OK`
-- Verify lockfile consistency:
-  - `poetry check` and `poetry lock --check` (or equivalent) succeed
-- Verify secrets hygiene:
-  - `git grep -n "client_secret\|Authorization: Bearer\|SAC_CLIENT_SECRET"` returns nothing (except docs explaining env vars)
+---
 
+## Milestone Exit Criteria (M1)
+- A documented “locked slice” query returns stable rows from SAC
+- `demo.refresh` produces a normalized cached series conforming to the strict contract
+- MCP server provides `health` and `get_timeseries` tools and works from cache by default
+- All M1 tasks are `DONE` with QA sign-off
+
+---
 
 ## Change Log (roadmap-impacting updates only)
-- (empty)
-
----
-
-## Template (copy for next milestone)
-> ### Milestone Mx — <Name>
-> **Goal:** …
-> #### Mx-01 — <Task title>
-> - **Status:** NOT STARTED
-> - **Owner (Dev):**
-> - **QA:**
-> - **Description:**
-> - **Deliverable:**
-> - **Definition of done:**
-> **What to test (QA):**
+- 2025-12-24: Added confirmed provider coordinates and MCP baseline milestone (M1) to support easy querying.

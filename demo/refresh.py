@@ -5,7 +5,9 @@ from typing import Dict
 
 from config import ConfigError, load_config
 from pipeline.cache import CacheError, CacheMeta, build_meta, load_cache, save_cache
+from pipeline.normalize_timeseries import NormalizeError, normalize_timeseries
 from sac_connector.export import ExportError, export_all, normalize_rows
+from sac_connector.timeseries import DEFAULT_SLICE, fetch_timeseries
 
 
 def _parse_params(raw: str) -> Dict[str, str]:
@@ -24,8 +26,8 @@ def refresh_from_sac(output_path: str) -> tuple[str, CacheMeta]:
     config = load_config()
 
     export_url = os.getenv("SAC_EXPORT_URL", "").strip()
-    if not export_url:
-        raise ConfigError("Missing required env var: SAC_EXPORT_URL")
+    provider_id = os.getenv("SAC_PROVIDER_ID", "").strip()
+    namespace_id = os.getenv("SAC_NAMESPACE_ID", "sac").strip() or "sac"
 
     params = _parse_params(os.getenv("SAC_EXPORT_PARAMS", ""))
     date_field = os.getenv("SAC_DATE_FIELD", "date")
@@ -34,16 +36,34 @@ def refresh_from_sac(output_path: str) -> tuple[str, CacheMeta]:
     dim_fields = [dim.strip() for dim in dim_fields_raw.split(",") if dim.strip()]
     grain = os.getenv("SAC_TIME_GRAIN", "month")
 
-    rows = export_all(config, export_url, params=params)
-    normalized = normalize_rows(
-        rows,
-        date_field=date_field,
-        value_field=value_field,
-        dim_fields=dim_fields,
-        grain=grain,
-    )
+    if provider_id:
+        raw_df = fetch_timeseries(
+            provider_id=provider_id,
+            namespace_id=namespace_id,
+            config=config,
+            slice_spec=DEFAULT_SLICE,
+        )
+        try:
+            normalized_df = normalize_timeseries(raw_df)
+        except NormalizeError as exc:
+            raise ExportError(str(exc)) from exc
+        normalized = normalized_df.to_dict(orient="records")
+    else:
+        if not export_url:
+            raise ConfigError(
+                "Missing SAC_PROVIDER_ID (preferred) or SAC_EXPORT_URL. "
+                "See docs/dataset_binding.md."
+            )
+        rows = export_all(config, export_url, params=params)
+        normalized = normalize_rows(
+            rows,
+            date_field=date_field,
+            value_field=value_field,
+            dim_fields=dim_fields,
+            grain=grain,
+        )
     if not normalized:
-        raise ExportError("No rows returned from SAC export.")
+        raise ExportError("No rows returned from SAC export. See docs/dataset_binding.md.")
     columns = list(normalized[0].keys()) if normalized else []
     normalized_sorted = sorted(
         normalized,

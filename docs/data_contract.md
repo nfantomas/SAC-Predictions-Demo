@@ -16,7 +16,8 @@ The `date` field must be aligned to the configured grain:
 - `quarter`: `YYYY-Qn` or `YYYY-MM-01` (first month of quarter)
 - `year`: `YYYY-01-01`
 
-The normalization step coerces input date strings to ISO dates for storage.
+For the SAC dataset, the raw `Date` column is in `YYYYMM` format and is
+normalized to `YYYY-MM-01` before aggregation.
 
 ## Allowed dimensions
 - Any dimension is allowed if represented as a `dim_*` column.
@@ -30,3 +31,10 @@ The normalization step coerces input date strings to ISO dates for storage.
 ## Demo fixture
 The fixture dataset in `tests/fixtures/sample_series.csv` adheres to this contract
 and is used for offline tests.
+
+## SAC dataset mapping
+- Raw `Date` (SAC): `YYYYMM` (string)
+- Normalized `date`: `YYYY-MM-01`
+- Raw measure: `SignedData`
+- Normalized `value`: float
+- Aggregation: sum by month
