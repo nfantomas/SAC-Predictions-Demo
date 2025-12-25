@@ -38,3 +38,10 @@
 - Added Scenario Assistant with LLM integration, rationale schema, and impact preview.
 - Added Anthropic provider, health checks, and robust JSON parsing/validation.
 - Added LLM debug tooling, scenario check CLI, and UI debug payload view.
+
+## Milestone M6 — Metric Mapping + LLM Reliability + UX Polish
+- Added metric mapping and validated HR cost configuration with provider metadata.
+- Reworked UI layout into Data/Forecast/Scenarios blocks and improved scenario presets.
+- Strengthened Scenario Assistant prompts, schema validation, and consistency checks.
+- Hardened Anthropic client parsing, model defaults, and max-token handling.
+- Added debug outputs, demo script, and scenario validation warnings.
