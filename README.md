@@ -26,7 +26,13 @@ poetry run python -m demo.forecast
 poetry run python -m demo.run
 poetry run python -m demo.scenarios
 poetry run python -m demo.smoke_scenarios
+poetry run python -m demo.smoke_app
 poetry run ruff check .
+```
+
+Run the UI:
+```bash
+streamlit run app.py
 ```
 
 ### What each command does

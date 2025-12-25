@@ -5,7 +5,7 @@ description = "SAC Predictions Demo"
 authors = [{ name = "SAC Demo Team", email = "devnull@example.com" }]
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["pandas>=2.2.0", "statsmodels>=0.14.0"]
+dependencies = ["pandas>=2.2.0", "statsmodels>=0.14.0", "streamlit>=1.38.0"]
 
 [tool.poetry]
 package-mode = false
@@ -21,6 +21,10 @@ pytest-cov = "^5.0.0"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+markers = [
+    "sac: integration tests that require SAC credentials",
+    "llm: integration tests that require LLM credentials",
+]
 
 [tool.ruff]
 line-length = 100

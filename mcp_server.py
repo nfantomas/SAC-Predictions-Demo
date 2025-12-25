@@ -2,6 +2,8 @@ import json
 from dataclasses import asdict
 from datetime import date
 import argparse
+import csv
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -11,7 +13,7 @@ from demo.refresh import refresh_from_sac
 from pipeline.cache import CacheError, load_cache
 from pipeline.forecast_runner import run_forecast
 from pipeline.scenario_runner import run_scenarios
-from scenarios.presets import PRESETS
+from scenarios.presets_v2 import PRESETS_V2
 
 
 DEFAULT_CACHE_PATH = "data/cache/sac_export.csv"
@@ -76,15 +78,13 @@ def get_timeseries(
 
 
 def _load_csv(path: str) -> List[Dict[str, str]]:
-    with open(path, "r", encoding="utf-8") as handle:
-        lines = handle.read().strip().splitlines()
-    if not lines:
+    if not os.path.exists(path):
+        raise CacheError("Cache is missing or corrupt. Delete data/cache and rerun refresh.")
+    with open(path, "r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        rows = [dict(row) for row in reader]
+    if not rows:
         raise CacheError("Cache is missing or empty.")
-    header = lines[0].split(",")
-    rows = []
-    for line in lines[1:]:
-        values = line.split(",")
-        rows.append(dict(zip(header, values)))
     return rows
 
 
@@ -100,8 +100,8 @@ def get_scenarios(from_cache: bool = True, scenario: Optional[str] = None) -> Di
         run_scenarios()
     rows = _load_csv("data/cache/scenarios.csv")
     if scenario:
-        if scenario not in PRESETS:
-            valid = sorted(PRESETS.keys())
+        if scenario not in PRESETS_V2:
+            valid = sorted(PRESETS_V2.keys())
             raise ValueError(f"Unknown scenario '{scenario}'. Valid: {', '.join(valid)}")
         rows = [row for row in rows if row.get("scenario") == scenario]
     return {"rows": rows}

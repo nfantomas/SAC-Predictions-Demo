@@ -18,7 +18,7 @@ def _strip_quotes(value: str) -> str:
     return value
 
 
-def load_env_file(path: str) -> None:
+def load_env_file(path: str, override: bool = False) -> None:
     if not path or not os.path.exists(path):
         return
     with open(path, "r", encoding="utf-8") as handle:
@@ -29,7 +29,8 @@ def load_env_file(path: str) -> None:
             key, value = raw.split("=", 1)
             key = key.strip()
             value = _strip_quotes(value.strip())
-            os.environ.setdefault(key, value)
+            if override or key not in os.environ:
+                os.environ[key] = value
 
 
 def _missing_required(env: Dict[str, str], required: Iterable[str]) -> Iterable[str]:
@@ -76,6 +77,10 @@ def safe_config_summary(config: Config) -> Dict[str, str]:
         "SAC_DATAEXPORT_BASE_URL": config.dataexport_base_url or "",
         "SAC_NAMESPACE_ID": config.namespace_id or "",
         "SAC_PROVIDER_ID": config.provider_id or "",
+        "ANTHROPIC_API_KEY": mask_secret(os.getenv("ANTHROPIC_API_KEY", "")),
+        "ANTHROPIC_MODEL": os.getenv("ANTHROPIC_MODEL", ""),
+        "LLM_TIMEOUT_SECONDS": os.getenv("LLM_TIMEOUT_SECONDS", ""),
+        "LLM_MAX_RETRIES": os.getenv("LLM_MAX_RETRIES", ""),
     }
 
 
@@ -91,6 +96,10 @@ def load_config(env_path: str = ".env") -> Config:
         "SAC_DATAEXPORT_BASE_URL": os.getenv("SAC_DATAEXPORT_BASE_URL", ""),
         "SAC_NAMESPACE_ID": os.getenv("SAC_NAMESPACE_ID", ""),
         "SAC_PROVIDER_ID": os.getenv("SAC_PROVIDER_ID", ""),
+        "ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY", ""),
+        "ANTHROPIC_MODEL": os.getenv("ANTHROPIC_MODEL", ""),
+        "LLM_TIMEOUT_SECONDS": os.getenv("LLM_TIMEOUT_SECONDS", ""),
+        "LLM_MAX_RETRIES": os.getenv("LLM_MAX_RETRIES", ""),
     }
 
     missing = _missing_required(

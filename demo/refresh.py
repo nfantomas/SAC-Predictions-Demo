@@ -6,6 +6,7 @@ from typing import Dict
 from config import ConfigError, load_config
 from pipeline.cache import CacheError, CacheMeta, build_meta, load_cache, save_cache
 from pipeline.normalize_timeseries import NormalizeError, normalize_timeseries
+from pipeline.hr_cost_series import get_hr_cost_series
 from sac_connector.export import ExportError, export_all, normalize_rows
 from sac_connector.timeseries import DEFAULT_SLICE, fetch_timeseries
 
@@ -37,15 +38,9 @@ def refresh_from_sac(output_path: str) -> tuple[str, CacheMeta]:
     grain = os.getenv("SAC_TIME_GRAIN", "month")
 
     if provider_id:
-        raw_df = fetch_timeseries(
-            provider_id=provider_id,
-            namespace_id=namespace_id,
-            config=config,
-            slice_spec=DEFAULT_SLICE,
-        )
         try:
-            normalized_df = normalize_timeseries(raw_df)
-        except NormalizeError as exc:
+            normalized_df, _meta = get_hr_cost_series(source="sac", refresh=True, cache_path=output_path)
+        except CacheError as exc:
             raise ExportError(str(exc)) from exc
         normalized = normalized_df.to_dict(orient="records")
     else:
@@ -75,37 +70,10 @@ def refresh_from_sac(output_path: str) -> tuple[str, CacheMeta]:
 
 
 def _refresh_from_fixture(output_path: str) -> str:
-    fixture_path = "tests/fixtures/sample_series.csv"
-    if not os.path.exists(fixture_path):
-        raise ExportError("Fixture missing: tests/fixtures/sample_series.csv")
-    with open(fixture_path, "r", encoding="utf-8") as handle:
-        lines = handle.read().strip().splitlines()
-    if len(lines) < 2:
-        raise ExportError("Fixture is empty. Check tests/fixtures/sample_series.csv.")
-
-    header = lines[0].split(",")
-    rows = []
-    for line in lines[1:]:
-        values = line.split(",")
-        rows.append(dict(zip(header, values)))
-
-    normalized = normalize_rows(
-        rows,
-        date_field="date",
-        value_field="value",
-        dim_fields=["dim_region"],
-        grain="month",
-    )
-    if not normalized:
-        raise ExportError("No rows returned from fixture dataset.")
-
-    columns = list(normalized[0].keys()) if normalized else []
-    normalized_sorted = sorted(
-        normalized,
-        key=lambda r: tuple(r.get(col, "") for col in columns),
-    )
-    meta = build_meta(normalized_sorted, source="fixture")
-    save_cache(normalized_sorted, meta, data_path=output_path)
+    try:
+        get_hr_cost_series(source="fixture", cache_path=output_path)
+    except CacheError as exc:
+        raise ExportError(str(exc)) from exc
     return output_path
 
 

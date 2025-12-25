@@ -3,7 +3,7 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 class CacheError(Exception):
@@ -49,11 +49,15 @@ def save_cache(
     meta: CacheMeta,
     data_path: str = "data/cache/data.csv",
     meta_path: str = "data/cache/meta.json",
+    extra_meta: Optional[Dict] = None,
 ) -> None:
     _write_csv(data_path, rows)
     os.makedirs(os.path.dirname(meta_path), exist_ok=True)
+    payload = meta.__dict__.copy()
+    if extra_meta:
+        payload.update(extra_meta)
     with open(meta_path, "w", encoding="utf-8") as handle:
-        json.dump(meta.__dict__, handle, indent=2, sort_keys=True)
+        json.dump(payload, handle, indent=2, sort_keys=True)
 
 
 def load_cache(
@@ -80,6 +84,17 @@ def load_cache(
         min_date=str(meta_raw["min_date"]),
         max_date=str(meta_raw["max_date"]),
     )
+
+
+def load_cache_meta_raw(meta_path: str = "data/cache/meta.json") -> Dict[str, object]:
+    if not os.path.exists(meta_path):
+        raise CacheError("Cache is missing or corrupt. Delete data/cache and rerun refresh.")
+    try:
+        with open(meta_path, "r", encoding="utf-8") as handle:
+            meta_raw = json.load(handle)
+    except json.JSONDecodeError as exc:
+        raise CacheError("Cache is missing or corrupt. Delete data/cache and rerun refresh.") from exc
+    return meta_raw
 
 
 def build_meta(rows: List[Dict], source: str) -> CacheMeta:

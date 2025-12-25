@@ -6,13 +6,13 @@ from typing import Dict, Optional
 import pandas as pd
 
 from pipeline.cache import CacheError
-from scenarios.overlay import apply_presets
-from scenarios.presets import PRESETS
+from scenarios.overlay_v2 import apply_presets_v2
+from scenarios.presets_v2 import PRESETS_V2
 
 
 def _serialize_presets() -> Dict[str, Dict]:
     serialized = {}
-    for name, preset in PRESETS.items():
+    for name, preset in PRESETS_V2.items():
         serialized[name] = {
             "description": preset["description"],
             "story": preset["story"],
@@ -34,9 +34,9 @@ def run_scenarios(
     if forecast_df.empty:
         raise CacheError("Forecast cache is empty. Run demo.forecast again.")
 
-    scenarios_df = apply_presets(
+    scenarios_df = apply_presets_v2(
         forecast_df[["date", "yhat"]],
-        {name: preset["params"] for name, preset in PRESETS.items()},
+        {name: preset["params"] for name, preset in PRESETS_V2.items()},
     )
     scenarios_df.to_csv(output_path, index=False)
 
@@ -53,5 +53,5 @@ def run_scenarios(
     return {
         "output_path": output_path,
         "meta_path": meta_path,
-        "scenario_count": str(len(PRESETS)),
+        "scenario_count": str(len(PRESETS_V2)),
     }
