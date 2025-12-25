@@ -8,6 +8,7 @@ import pandas as pd
 from pipeline.cache import CacheError
 from scenarios.overlay_v2 import apply_presets_v2
 from scenarios.presets_v2 import PRESETS_V2
+from scenarios.validate import validate_params
 
 
 def _serialize_presets() -> Dict[str, Dict]:
@@ -34,15 +35,25 @@ def run_scenarios(
     if forecast_df.empty:
         raise CacheError("Forecast cache is empty. Run demo.forecast again.")
 
+    horizon_years = len(pd.to_datetime(forecast_df["date"]).dt.year.unique())
+    validated_presets = {}
+    preset_warnings = {}
+    for name, preset in PRESETS_V2.items():
+        params, warnings = validate_params(preset["params"], horizon_years=horizon_years)
+        validated_presets[name] = params
+        if warnings:
+            preset_warnings[name] = warnings
+
     scenarios_df = apply_presets_v2(
         forecast_df[["date", "yhat"]],
-        {name: preset["params"] for name, preset in PRESETS_V2.items()},
+        validated_presets,
     )
     scenarios_df.to_csv(output_path, index=False)
 
     meta_out = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "presets": _serialize_presets(),
+        "preset_warnings": preset_warnings,
         "horizon_months": len(forecast_df),
         "output_min_date": scenarios_df["date"].min(),
         "output_max_date": scenarios_df["date"].max(),

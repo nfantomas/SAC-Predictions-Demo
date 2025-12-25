@@ -10,3 +10,4 @@ def test_hr_cost_series_fixture(tmp_path):
     assert set(df.columns) >= {"date", "value"}
     assert meta["metric_name"] == "hr_cost"
     assert meta["currency"]
+    assert meta["grain"]

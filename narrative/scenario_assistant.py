@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 from typing import Dict, Iterable, Optional, Tuple
 
-from llm.anthropic_provider import generate_json as anthropic_generate
+from narrative.anthropic_client import generate_json as anthropic_generate
 from llm.provider import LLMError
 
 PROMPT_PATH = Path("llm/prompts/scenario_assistant_v2.txt")

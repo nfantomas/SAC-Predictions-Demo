@@ -65,6 +65,7 @@ class Config:
     dataexport_base_url: Optional[str]
     namespace_id: Optional[str]
     provider_id: Optional[str]
+    provider_name: Optional[str] = None
 
 
 def safe_config_summary(config: Config) -> Dict[str, str]:
@@ -77,6 +78,7 @@ def safe_config_summary(config: Config) -> Dict[str, str]:
         "SAC_DATAEXPORT_BASE_URL": config.dataexport_base_url or "",
         "SAC_NAMESPACE_ID": config.namespace_id or "",
         "SAC_PROVIDER_ID": config.provider_id or "",
+        "SAC_PROVIDER_NAME": config.provider_name or "",
         "ANTHROPIC_API_KEY": mask_secret(os.getenv("ANTHROPIC_API_KEY", "")),
         "ANTHROPIC_MODEL": os.getenv("ANTHROPIC_MODEL", ""),
         "LLM_TIMEOUT_SECONDS": os.getenv("LLM_TIMEOUT_SECONDS", ""),
@@ -96,6 +98,7 @@ def load_config(env_path: str = ".env") -> Config:
         "SAC_DATAEXPORT_BASE_URL": os.getenv("SAC_DATAEXPORT_BASE_URL", ""),
         "SAC_NAMESPACE_ID": os.getenv("SAC_NAMESPACE_ID", ""),
         "SAC_PROVIDER_ID": os.getenv("SAC_PROVIDER_ID", ""),
+        "SAC_PROVIDER_NAME": os.getenv("SAC_PROVIDER_NAME", ""),
         "ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY", ""),
         "ANTHROPIC_MODEL": os.getenv("ANTHROPIC_MODEL", ""),
         "LLM_TIMEOUT_SECONDS": os.getenv("LLM_TIMEOUT_SECONDS", ""),
@@ -124,4 +127,5 @@ def load_config(env_path: str = ".env") -> Config:
         dataexport_base_url=env["SAC_DATAEXPORT_BASE_URL"] or None,
         namespace_id=env["SAC_NAMESPACE_ID"] or None,
         provider_id=env["SAC_PROVIDER_ID"] or None,
+        provider_name=env["SAC_PROVIDER_NAME"] or None,
     )

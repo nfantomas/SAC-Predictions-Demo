@@ -96,3 +96,116 @@ def test_normalize_shock_pct_percent():
     assert params["shock_pct"] == pytest.approx(-0.25)
     assert consistency == "corrected"
     assert any("Normalized shock_pct" in item for item in warnings)
+
+
+def test_golden_scenario_outputs(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+
+    def fake_generate(system_prompt, user_prompt, schema_hint=None):
+        text = user_prompt.lower()
+        if "trade wars erupt" in text:
+            return {
+                "params": {
+                    "preset_base": "trade_war_downside",
+                    "growth_delta_pp_per_year": -0.2,
+                    "shock_start_year": 2026,
+                    "shock_pct": -0.2,
+                    "shock_duration_months": 12,
+                    "drift_pp_per_year": -0.02,
+                },
+                "rationale": {
+                    "summary": "Trade wars raise costs and slow hiring.",
+                    "drivers": ["Tariff-driven inflation", "Hiring freeze pressure"],
+                    "assumptions": ["Trade war persists for 12 months"],
+                    "confidence": "medium",
+                    "checks": {"text_sentiment": "downside", "param_consistency": "ok"},
+                },
+            }
+        if "recession" in text:
+            return {
+                "params": {
+                    "preset_base": None,
+                    "growth_delta_pp_per_year": -0.15,
+                    "shock_start_year": 2025,
+                    "shock_pct": -0.1,
+                    "shock_duration_months": 12,
+                    "drift_pp_per_year": -0.01,
+                },
+                "rationale": {
+                    "summary": "Recession leads to cost containment and slower growth.",
+                    "drivers": ["Budget cuts", "Hiring slowdown"],
+                    "assumptions": ["No immediate recovery"],
+                    "confidence": "medium",
+                    "checks": {"text_sentiment": "downside", "param_consistency": "ok"},
+                },
+            }
+        if "ai boom" in text:
+            return {
+                "params": {
+                    "preset_base": None,
+                    "growth_delta_pp_per_year": 0.1,
+                    "shock_start_year": None,
+                    "shock_pct": 0.0,
+                    "shock_duration_months": None,
+                    "drift_pp_per_year": 0.0,
+                },
+                "rationale": {
+                    "summary": "AI boom drives expansion and upskilling.",
+                    "drivers": ["Productivity investments", "Talent upskilling"],
+                    "assumptions": ["Demand stays strong"],
+                    "confidence": "high",
+                    "checks": {"text_sentiment": "upside", "param_consistency": "ok"},
+                },
+            }
+        if "aging workforce" in text:
+            return {
+                "params": {
+                    "preset_base": "aging_pressure",
+                    "growth_delta_pp_per_year": 0.0,
+                    "shock_start_year": None,
+                    "shock_pct": 0.0,
+                    "shock_duration_months": None,
+                    "drift_pp_per_year": -0.02,
+                },
+                "rationale": {
+                    "summary": "Demographics reduce growth over time.",
+                    "drivers": ["Retirement wave", "Hiring friction"],
+                    "assumptions": ["No major policy offsets"],
+                    "confidence": "medium",
+                    "checks": {"text_sentiment": "downside", "param_consistency": "ok"},
+                },
+            }
+        return {
+            "params": {
+                "preset_base": None,
+                "growth_delta_pp_per_year": -0.05,
+                "shock_start_year": 2025,
+                "shock_pct": -0.05,
+                "shock_duration_months": 6,
+                "drift_pp_per_year": 0.0,
+            },
+            "rationale": {
+                "summary": "Restructuring cuts near-term costs.",
+                "drivers": ["Layoffs", "Cost rationalization"],
+                "assumptions": ["Limited rehiring"],
+                "confidence": "medium",
+                "checks": {"text_sentiment": "downside", "param_consistency": "ok"},
+            },
+        }
+
+    monkeypatch.setattr("narrative.scenario_assistant.anthropic_generate", fake_generate)
+
+    inputs = [
+        "trade wars erupt between US and China",
+        "global recession",
+        "ai boom accelerates productivity",
+        "aging workforce pressures hiring",
+        "restructuring plan announced",
+    ]
+    for text in inputs:
+        result = suggest_scenario(text, 10, {}, use_llm=True)
+        assert result["mode"] == "llm"
+        assert "params" in result and "rationale" in result
+        assert result["rationale"]["summary"]
+        assert result["rationale"]["drivers"]
+        assert result["rationale"]["assumptions"]

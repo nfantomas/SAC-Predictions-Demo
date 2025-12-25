@@ -23,5 +23,5 @@ def test_meta_provenance_fields_present():
     if not os.getenv("RUN_SAC_TESTS"):
         pytest.skip("RUN_SAC_TESTS not set")
     meta_raw = load_cache_meta_raw()
-    for field in ["metric_name", "unit", "currency", "measure_used", "filters_used", "aggregation"]:
+    for field in ["metric_name", "unit", "currency", "measure_used", "filters_used", "aggregation", "grain"]:
         assert field in meta_raw
