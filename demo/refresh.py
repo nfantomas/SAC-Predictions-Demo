@@ -39,10 +39,14 @@ def refresh_from_sac(output_path: str) -> tuple[str, CacheMeta]:
 
     if provider_id:
         try:
-            normalized_df, _meta = get_hr_cost_series(source="sac", refresh=True, cache_path=output_path)
+            get_hr_cost_series(source="sac", refresh=True, cache_path=output_path)
         except CacheError as exc:
             raise ExportError(str(exc)) from exc
-        normalized = normalized_df.to_dict(orient="records")
+        try:
+            _, meta = load_cache(data_path=output_path)
+        except CacheError as exc:
+            raise ExportError(str(exc)) from exc
+        return output_path, meta
     else:
         if not export_url:
             raise ConfigError(

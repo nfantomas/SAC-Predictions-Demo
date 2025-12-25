@@ -7,7 +7,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from narrative.generator import generate_narrative, summarize_series
+from narrative.generator import summarize_series
 from narrative.scenario_assistant import suggest_scenario
 from pipeline.cache import CacheError, load_cache, load_cache_meta_raw
 from pipeline.run_all import run_all
@@ -186,28 +186,12 @@ def main() -> None:
     refresh_status = st.session_state.pop("refresh_status", None)
     if refresh_status:
         if refresh_status["ok"] and refresh_status["refresh_used_cache"]:
-            st.warning(f"Using cached data from {refresh_status['last_refresh']}.")
+            st.caption(f"Using cached data from {refresh_status['last_refresh']}.")
         elif refresh_status["ok"]:
             st.success("Refresh pipeline complete.")
         else:
             st.error("Refresh failed and cache missing. Run demo.refresh first.")
 
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    provider_name = meta_raw.get("provider_name", "SAC model")
-    row_count = meta.row_count
-    date_range = f"{meta.min_date} → {meta.max_date}"
-    st.markdown(
-        f"""
-        <div class="meta-grid">
-          <div class="meta-key">Provider</div><div class="meta-val">{provider_name}</div>
-          <div class="meta-key">Provider ID</div><div class="meta-val">{meta_raw.get("provider_id", "unknown")}</div>
-          <div class="meta-key">Last refresh</div><div class="meta-val">{meta.last_refresh_time}</div>
-          <div class="meta-key">Row count</div><div class="meta-val">{row_count}</div>
-          <div class="meta-key">Date range</div><div class="meta-val">{date_range}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
     if st.button("Refresh from SAC", use_container_width=True):
         with st.spinner("Running refresh → forecast → scenarios..."):
             result = run_all()
@@ -220,27 +204,31 @@ def main() -> None:
         else:
             st.session_state["refresh_status"] = {"ok": False, "refresh_used_cache": False}
         st.rerun()
-    with st.expander("Show 10 sample rows"):
-        st.dataframe(series_df.head(10), use_container_width=True)
-    with st.expander("Metric definition"):
-        metric_def = {
-            "Measure": meta_raw.get("measure_used", "unknown"),
-            "Currency": meta_raw.get("currency", "unknown"),
-            "Grain": grain_label,
-            "Filters applied": json.dumps(meta_raw.get("filters_used", {})),
-        }
+    with st.expander("SAC data details"):
+        provider_name = meta_raw.get("provider_name", "unknown")
+        metric_name = meta_raw.get("metric_name", "unknown")
+        unit = meta_raw.get("unit", "unknown")
+        measure_used = meta_raw.get("measure_used", "unknown")
+        aggregation = meta_raw.get("aggregation", "unknown")
+        last_refresh = meta_raw.get("last_refresh_time", meta.last_refresh_time)
+        filters_used = meta_raw.get("filters_used", {})
         st.markdown(
             f"""
             <div class="meta-grid">
-              <div class="meta-key">Measure</div><div class="meta-val">{metric_def["Measure"]}</div>
-              <div class="meta-key">Currency</div><div class="meta-val">{metric_def["Currency"]}</div>
-              <div class="meta-key">Grain</div><div class="meta-val">{metric_def["Grain"]}</div>
-              <div class="meta-key">Filters</div><div class="meta-val">{metric_def["Filters applied"]}</div>
+              <div class="meta-key">Provider</div><div class="meta-val">{provider_name}</div>
+              <div class="meta-key">Metric</div><div class="meta-val">{metric_name}</div>
+              <div class="meta-key">Unit</div><div class="meta-val">{unit}</div>
+              <div class="meta-key">Currency</div><div class="meta-val">{currency or "unknown"}</div>
+              <div class="meta-key">Measure</div><div class="meta-val">{measure_used}</div>
+              <div class="meta-key">Aggregation</div><div class="meta-val">{aggregation}</div>
+              <div class="meta-key">Filters</div><div class="meta-val">{json.dumps(filters_used)}</div>
+              <div class="meta-key">Last refresh</div><div class="meta-val">{last_refresh}</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-    st.markdown("</div>", unsafe_allow_html=True)
+    with st.expander("Show 10 sample rows"):
+        st.dataframe(series_df.head(10), use_container_width=True)
 
     st.divider()
 
@@ -251,34 +239,134 @@ def main() -> None:
     k3.metric("Year‑10 annualized (base)", f"{year10_total:,.0f} {currency}")
     k4.metric("Delta vs base (year‑5)", f"{delta_year5:,.0f} {currency}")
 
-    actual_line = alt.Chart(series_df).mark_line(color="#1f77b4").encode(
-        x="date:T",
-        y=alt.Y("value:Q", title=f"HR cost ({currency})"),
-        tooltip=["date:T", "value:Q"],
+    st.divider()
+    st.subheader("Scenarios")
+    forecast_years = list(forecast["date"].dt.year.unique())
+    preset_params, preset_warnings = validate_params(
+        PRESETS_V2[selected_preset]["params"], horizon_years=len(forecast_years)
     )
-    forecast_line = alt.Chart(forecast).mark_line(color="#c14b2a").encode(
+
+    if "pending_override" in st.session_state:
+        pending = st.session_state.pop("pending_override")
+        st.session_state["override_defaults"] = pending
+        st.session_state["growth_delta_pct_widget"] = float(pending["growth_delta_pct"])
+        st.session_state["shock_pct_widget"] = float(pending["shock_pct"])
+        st.session_state["drift_pct_widget"] = float(pending["drift_pct"])
+        st.session_state["shock_duration_widget"] = int(pending["shock_duration"])
+        st.session_state["shock_year_choice_widget"] = pending["shock_year_choice"]
+
+    if "override_defaults" not in st.session_state:
+        st.session_state["override_defaults"] = {
+            "growth_delta_pct": float(preset_params.growth_delta_pp_per_year) * 100.0,
+            "shock_pct": float(preset_params.shock_pct),
+            "drift_pct": float(preset_params.drift_pp_per_year) * 100.0,
+            "shock_duration": int(preset_params.shock_duration_months or 0),
+            "shock_year_choice": str(preset_params.shock_start_year)
+            if preset_params.shock_start_year
+            else "(none)",
+        }
+    else:
+        defaults = st.session_state["override_defaults"]
+        if "growth_delta_pct" not in defaults:
+            defaults["growth_delta_pct"] = float(defaults.get("growth_delta_pp", 0.0)) * 100.0
+        if "drift_pct" not in defaults:
+            defaults["drift_pct"] = float(defaults.get("drift_pp", 0.0)) * 100.0
+
+    defaults = st.session_state["override_defaults"]
+    current_growth_delta_pct = float(
+        st.session_state.get("growth_delta_pct_widget", defaults["growth_delta_pct"])
+    )
+    current_shock_pct = float(st.session_state.get("shock_pct_widget", defaults["shock_pct"]))
+    current_drift_pct = float(st.session_state.get("drift_pct_widget", defaults["drift_pct"]))
+    current_shock_duration = int(
+        st.session_state.get("shock_duration_widget", defaults["shock_duration"])
+    )
+    current_shock_year_choice = st.session_state.get(
+        "shock_year_choice_widget", defaults["shock_year_choice"]
+    )
+
+    shock_year = None if current_shock_year_choice == "(none)" else int(current_shock_year_choice)
+    growth_delta_pp = current_growth_delta_pct / 100.0
+    drift_pp = current_drift_pct / 100.0
+    override_error = None
+    try:
+        validate_overrides(
+            forecast_years=forecast_years,
+            shock_year=shock_year,
+            shock_pct=current_shock_pct,
+            growth_delta_pp=growth_delta_pp,
+        )
+    except ValueError as exc:
+        override_error = str(exc)
+        shock_year = None
+
+    override_params = ScenarioParamsV2(
+        growth_delta_pp_per_year=growth_delta_pp,
+        shock_start_year=shock_year,
+        shock_pct=current_shock_pct,
+        shock_duration_months=current_shock_duration or None,
+        drift_pp_per_year=drift_pp,
+    )
+    override_params, override_warnings = validate_params(
+        override_params, horizon_years=len(forecast_years)
+    )
+    scenario_override = apply_scenario_v2(forecast[["date", "yhat"]], override_params, "override")
+
+    st.subheader("Forecast view")
+    chart_frames = []
+    actual_plot = series_df[["date", "value"]].rename(columns={"value": "y"})
+    actual_plot["series"] = "Actuals"
+    chart_frames.append(actual_plot)
+
+    baseline_plot = forecast[["date", "yhat"]].rename(columns={"yhat": "y"})
+    baseline_plot["series"] = "Baseline forecast"
+    chart_frames.append(baseline_plot)
+
+    show_preset = selected_preset != "base" and not selected_rows.empty
+    preset_label = f"Preset: {selected_preset.replace('_', ' ').title()}"
+    if show_preset:
+        preset_plot = selected_rows[["date", "yhat"]].rename(columns={"yhat": "y"})
+        preset_plot["series"] = preset_label
+        chart_frames.append(preset_plot)
+
+    show_override = any(
+        [
+            override_params.growth_delta_pp_per_year,
+            override_params.shock_start_year,
+            override_params.shock_pct,
+            override_params.shock_duration_months,
+            override_params.drift_pp_per_year,
+        ]
+    )
+    if show_override:
+        scenario_override["date"] = pd.to_datetime(scenario_override["date"])
+        override_plot = scenario_override[["date", "yhat"]].rename(columns={"yhat": "y"})
+        override_plot["series"] = "Override"
+        chart_frames.append(override_plot)
+
+    chart_df = pd.concat(chart_frames, ignore_index=True)
+    series_colors = {
+        "Actuals": "#1f77b4",
+        "Baseline forecast": "#c14b2a",
+    }
+    if show_preset:
+        series_colors[preset_label] = "#6b6b6b"
+    if show_override:
+        series_colors["Override"] = "#2a7f62"
+    series_order = list(series_colors.keys())
+    color_scale = alt.Scale(domain=series_order, range=[series_colors[name] for name in series_order])
+
+    base_chart = alt.Chart(chart_df).mark_line().encode(
         x="date:T",
-        y="yhat:Q",
-        tooltip=["date:T", "yhat:Q"],
+        y=alt.Y("y:Q", title=f"HR cost ({currency})"),
+        color=alt.Color("series:N", scale=color_scale, legend=alt.Legend(title="Series")),
+        tooltip=["series:N", "date:T", "y:Q"],
     )
     boundary = alt.Chart(pd.DataFrame({"date": [last_actual_date]})).mark_rule(
         color="#5a4d44",
         strokeDash=[4, 4],
     ).encode(x="date:T")
-    st.altair_chart(actual_line + forecast_line + boundary, use_container_width=True)
-
-    st.divider()
-    st.subheader("Scenarios")
-    scenario_chart = alt.Chart(scenarios).mark_line(opacity=0.2, color="#999").encode(
-        x="date:T", y="yhat:Q", detail="scenario:N"
-    )
-    highlight = alt.Chart(scenarios[scenarios["scenario"] == selected_preset]).mark_line(
-        color="#c14b2a", strokeWidth=2.5
-    ).encode(x="date:T", y="yhat:Q")
-    st.altair_chart(scenario_chart + highlight, use_container_width=True)
-
-    st.divider()
-    forecast_years = list(forecast["date"].dt.year.unique())
+    st.altair_chart(base_chart + boundary, use_container_width=True)
 
     st.subheader("Scenario Presets")
     preset_names = list(PRESETS_V2.keys())
@@ -296,125 +384,64 @@ def main() -> None:
                 f"Drift {preset['params'].drift_pp_per_year:+.2f} pp/yr"
             )
 
-    selected = _normalize_preset_name(st.session_state.get("selected_preset", "base"))
-    if selected not in PRESETS_V2:
-        selected = "base"
-        st.session_state["selected_preset"] = "base"
-    preset_params, preset_warnings = validate_params(
-        PRESETS_V2[selected]["params"], horizon_years=len(forecast_years)
-    )
     if preset_warnings:
         st.warning("Preset adjusted: " + " | ".join(preset_warnings))
 
-    st.subheader("Scenario Overrides (optional)")
+    with st.expander("Scenario Overrides (optional)"):
+        with st.form("override_form"):
+            growth_delta_pct = st.slider(
+                "Growth delta (% per year)",
+                -50.0,
+                50.0,
+                float(defaults["growth_delta_pct"]),
+                1.0,
+                key="growth_delta_pct_widget",
+            )
+            year_options = ["(none)"] + [str(year) for year in forecast_years]
+            shock_year_choice = st.selectbox(
+                "Shock year (optional)",
+                year_options,
+                index=year_options.index(defaults["shock_year_choice"]),
+                key="shock_year_choice_widget",
+            )
+            shock_pct = st.slider(
+                "Shock pct (fraction, -0.25 = -25%)",
+                -0.9,
+                1.0,
+                float(defaults["shock_pct"]),
+                0.01,
+                key="shock_pct_widget",
+            )
+            drift_pct = st.slider(
+                "Drift (% per year)",
+                -20.0,
+                20.0,
+                float(defaults["drift_pct"]),
+                1.0,
+                key="drift_pct_widget",
+            )
+            shock_duration = st.slider(
+                "Shock duration (months, 0 = permanent)",
+                0,
+                60,
+                int(defaults["shock_duration"]),
+                1,
+                key="shock_duration_widget",
+            )
+            submitted = st.form_submit_button("Apply overrides")
 
-    if "pending_override" in st.session_state:
-        pending = st.session_state.pop("pending_override")
-        st.session_state["override_defaults"] = pending
-        st.session_state["growth_delta_pct_widget"] = float(pending["growth_delta_pct"])
-        st.session_state["shock_pct_widget"] = float(pending["shock_pct"])
-        st.session_state["drift_pct_widget"] = float(pending["drift_pct"])
-        st.session_state["shock_duration_widget"] = int(pending["shock_duration"])
-        st.session_state["shock_year_choice_widget"] = pending["shock_year_choice"]
-
-    if "override_defaults" not in st.session_state:
-        st.session_state["override_defaults"] = {
-            "growth_delta_pct": float(preset_params.growth_delta_pp_per_year) * 100.0,
-            "shock_pct": float(preset_params.shock_pct),
-            "drift_pct": float(preset_params.drift_pp_per_year) * 100.0,
-            "shock_duration": int(preset_params.shock_duration_months or 0),
-            "shock_year_choice": str(preset_params.shock_start_year) if preset_params.shock_start_year else "(none)",
-        }
-    else:
-        defaults = st.session_state["override_defaults"]
-        if "growth_delta_pct" not in defaults:
-            defaults["growth_delta_pct"] = float(defaults.get("growth_delta_pp", 0.0)) * 100.0
-        if "drift_pct" not in defaults:
-            defaults["drift_pct"] = float(defaults.get("drift_pp", 0.0)) * 100.0
-
-    defaults = st.session_state["override_defaults"]
-    with st.form("override_form"):
-        growth_delta_pct = st.slider(
-            "Growth delta (% per year)",
-            -50.0,
-            50.0,
-            float(defaults["growth_delta_pct"]),
-            1.0,
-            key="growth_delta_pct_widget",
-        )
-        year_options = ["(none)"] + [str(year) for year in forecast_years]
-        shock_year_choice = st.selectbox(
-            "Shock year (optional)",
-            year_options,
-            index=year_options.index(defaults["shock_year_choice"]),
-            key="shock_year_choice_widget",
-        )
-        shock_pct = st.slider(
-            "Shock pct (fraction, -0.25 = -25%)",
-            -0.9,
-            1.0,
-            float(defaults["shock_pct"]),
-            0.01,
-            key="shock_pct_widget",
-        )
-        drift_pct = st.slider(
-            "Drift (% per year)",
-            -20.0,
-            20.0,
-            float(defaults["drift_pct"]),
-            1.0,
-            key="drift_pct_widget",
-        )
-        shock_duration = st.slider(
-            "Shock duration (months, 0 = permanent)",
-            0,
-            60,
-            int(defaults["shock_duration"]),
-            1,
-            key="shock_duration_widget",
-        )
-        submitted = st.form_submit_button("Apply overrides")
-
-    if submitted:
-        st.session_state["override_defaults"] = {
-            "growth_delta_pct": growth_delta_pct,
-            "shock_pct": shock_pct,
-            "drift_pct": drift_pct,
-            "shock_duration": shock_duration,
-            "shock_year_choice": shock_year_choice,
-        }
-
-    forecast_dates = list(forecast["date"].dt.year.unique())
-    shock_year = None if shock_year_choice == "(none)" else int(shock_year_choice)
-    growth_delta_pp = growth_delta_pct / 100.0
-    drift_pp = drift_pct / 100.0
-    try:
-        validate_overrides(
-            forecast_years=forecast_years,
-            shock_year=shock_year,
-            shock_pct=shock_pct,
-            growth_delta_pp=growth_delta_pp,
-        )
-    except ValueError as exc:
-        st.warning(str(exc))
-        shock_year = None
-
-    override_params = ScenarioParamsV2(
-        growth_delta_pp_per_year=growth_delta_pp,
-        shock_start_year=shock_year,
-        shock_pct=shock_pct,
-        shock_duration_months=shock_duration or None,
-        drift_pp_per_year=drift_pp,
-    )
-    override_params, override_warnings = validate_params(
-        override_params, horizon_years=len(forecast_years)
-    )
-    if override_warnings:
-        st.warning("Adjusted to stay within safe bounds: " + " | ".join(override_warnings))
-    scenario_override = apply_scenario_v2(forecast[["date", "yhat"]], override_params, "override")
-    override_chart = scenario_override.set_index(pd.to_datetime(scenario_override["date"]))["yhat"]
-    baseline_chart = forecast.set_index("date")["yhat"]
-    st.line_chart(pd.concat({"baseline": baseline_chart, "override": override_chart}, axis=1), height=260)
+        if submitted:
+            st.session_state["override_defaults"] = {
+                "growth_delta_pct": growth_delta_pct,
+                "shock_pct": shock_pct,
+                "drift_pct": drift_pct,
+                "shock_duration": shock_duration,
+                "shock_year_choice": shock_year_choice,
+            }
+        if override_error:
+            st.warning(override_error)
+        if override_warnings:
+            st.warning("Adjusted to stay within safe bounds: " + " | ".join(override_warnings))
 
     st.divider()
     st.subheader("Scenario Assistant")
@@ -508,35 +535,6 @@ def main() -> None:
                 st.session_state["pending_preset"] = _normalize_preset_name(s["preset_base"])
 
         st.button("Apply suggestion", on_click=_apply_suggestion)
-
-    with st.expander("Narrative (optional)"):
-        market_text = st.text_area("Market indications", placeholder="e.g., aging workforce, trade wars")
-        use_llm = st.checkbox("Use LLM (optional)", value=False)
-        if st.button("Generate narrative"):
-            series_df = pd.DataFrame(rows)
-            stats = summarize_series(series_df)
-            narrative = generate_narrative(
-                stats,
-                {
-                    "growth_delta_pp_per_year": override_params.growth_delta_pp_per_year,
-                    "shock_start_year": override_params.shock_start_year,
-                    "shock_pct": override_params.shock_pct,
-                    "shock_duration_months": override_params.shock_duration_months,
-                    "drift_pp_per_year": override_params.drift_pp_per_year,
-                },
-                market_text,
-                use_llm=use_llm,
-            )
-            st.markdown(f"**{narrative['title']}**")
-            st.write(narrative["summary"])
-            st.markdown("**Key points**")
-            for bullet in narrative["bullets"]:
-                st.markdown(f"- {bullet}")
-            st.caption(f"Mode: {narrative['mode']}")
-            st.caption(narrative["assumptions"])
-            if narrative.get("reason"):
-                st.caption(f"Fallback reason: {narrative['reason']}")
-
 
 if __name__ == "__main__":
     main()

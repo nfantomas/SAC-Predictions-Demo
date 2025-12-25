@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+- Simplified demo UI to a single combined chart placed above scenario controls.
+- Hid SAC data details and sample rows behind expanders; removed narrative UI.
+- Made Scenario Overrides collapsible to reduce visual clutter.
+- Preserved SAC/fixture metadata on refresh so UI shows provider/metric/unit/currency.
+- Tweaked refresh banner to a neutral caption (no warning highlight).
+
 ## Milestone M0 — Setup & Access
 - Added SAC access checklist and updated OAuth/DES connectivity guidance.
 - Implemented OAuth client-credentials auth with masking and auth/DES checks.
