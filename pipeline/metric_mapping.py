@@ -19,9 +19,20 @@ class MetricMapping:
     unit: str
     filters: Dict[str, str]
     calculation: str
+    output_mode: str
 
 
 _ALLOWED_MEASURES = {"SignedData", "Cost"}
+_ALLOWED_OUTPUT_MODES = {"cost", "fte"}
+
+
+def _load_output_mode() -> str:
+    raw = os.getenv("HR_SERIES_MODE", "cost").strip().lower() or "cost"
+    if raw not in _ALLOWED_OUTPUT_MODES:
+        raise MetricMappingError(
+            f"Unsupported HR_SERIES_MODE '{raw}'. Allowed: {', '.join(sorted(_ALLOWED_OUTPUT_MODES))}."
+        )
+    return raw
 
 
 def _load_filters() -> Dict[str, str]:
@@ -43,21 +54,32 @@ def _load_filters() -> Dict[str, str]:
 
 
 def get_metric_mapping() -> MetricMapping:
+    output_mode = _load_output_mode()
     measure = os.getenv("HR_COST_MEASURE", "SignedData").strip()
     if measure not in _ALLOWED_MEASURES:
         raise MetricMappingError(
             f"Unsupported HR_COST_MEASURE '{measure}'. Allowed: {', '.join(sorted(_ALLOWED_MEASURES))}."
         )
-    currency = os.getenv("HR_COST_CURRENCY", "EUR").strip() or "EUR"
+    if output_mode == "fte" and measure == "Cost":
+        raise MetricMappingError("HR_SERIES_MODE=fte requires HR_COST_MEASURE=SignedData.")
+    currency = ""
+    if output_mode == "cost":
+        currency = os.getenv("HR_COST_CURRENCY", "EUR").strip() or "EUR"
     grain = os.getenv("HR_COST_GRAIN", "month").strip() or "month"
     filters = _load_filters()
-    calculation = "direct_measure" if measure == "Cost" else "fte_times_avg_cost"
+    if output_mode == "fte":
+        calculation = "raw_fte"
+    else:
+        calculation = "direct_measure" if measure == "Cost" else "fte_times_avg_cost"
+    metric_name = "fte" if output_mode == "fte" else "hr_cost"
+    unit = "fte" if output_mode == "fte" else "monthly_cost"
     return MetricMapping(
-        metric_name="hr_cost",
+        metric_name=metric_name,
         measure=measure,
         currency=currency,
         grain=grain,
-        unit="monthly_cost",
+        unit=unit,
         filters=filters,
         calculation=calculation,
+        output_mode=output_mode,
     )

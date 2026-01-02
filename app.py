@@ -27,6 +27,28 @@ def _load_series():
     return rows, meta
 
 
+def _display_metric_name(metric_name: str) -> str:
+    name = metric_name.strip().lower()
+    if name == "hr_cost":
+        return "HR Cost"
+    if name == "fte":
+        return "FTE"
+    return metric_name.replace("_", " ").title() if metric_name else "Series"
+
+
+def _display_unit(unit: str) -> str:
+    if not unit:
+        return ""
+    if unit.lower() == "fte":
+        return "FTE"
+    return unit.replace("_", " ")
+
+
+def _is_headcount(metric_name: str, unit: str) -> bool:
+    combined = f"{metric_name} {unit}".lower()
+    return "fte" in combined or "headcount" in combined
+
+
 def _load_forecast() -> pd.DataFrame:
     if not CACHE_FORECAST.exists():
         raise FileNotFoundError("forecast")
@@ -147,12 +169,18 @@ def main() -> None:
         st.error("Scenario cache empty. Run `python -m demo.scenarios` first.")
         return
 
-    currency = meta_raw.get("currency", "")
+    metric_name = str(meta_raw.get("metric_name", ""))
+    unit = str(meta_raw.get("unit", ""))
+    currency = str(meta_raw.get("currency", ""))
     grain = meta_raw.get("grain", "monthly")
     grain_label = "monthly" if grain in ("month", "monthly") else grain
+    metric_label = _display_metric_name(metric_name)
+    unit_label = currency or _display_unit(unit)
+    title_unit = unit_label if unit_label.lower() != metric_label.lower() else ""
+    title_suffix = f"{grain_label}" + (f", {title_unit}" if title_unit else "")
 
     st.markdown(
-        f'<div class="app-title">HR Cost ({grain_label}, {currency})</div>',
+        f'<div class="app-title">{metric_label} ({title_suffix})</div>',
         unsafe_allow_html=True,
     )
     st.caption("Actuals from SAP Analytics Cloud • Forecast + scenarios • Adjustable assumptions")
@@ -164,8 +192,13 @@ def main() -> None:
 
     last_actual_value = float(series_df["value"].iloc[-1])
     last_actual_date = series_df["date"].iloc[-1]
-    next_12_total = float(forecast["yhat"].iloc[:12].sum())
-    year10_total = float(forecast["yhat"].iloc[-12:].sum())
+    use_average = _is_headcount(metric_name, unit)
+    if use_average:
+        next_12_value = float(forecast["yhat"].iloc[:12].mean())
+        year10_value = float(forecast["yhat"].iloc[-12:].mean())
+    else:
+        next_12_value = float(forecast["yhat"].iloc[:12].sum())
+        year10_value = float(forecast["yhat"].iloc[-12:].sum())
 
     if "pending_preset" in st.session_state:
         st.session_state["selected_preset"] = _normalize_preset_name(
@@ -177,9 +210,19 @@ def main() -> None:
     if selected_preset not in PRESETS_V2:
         selected_preset = "base"
         st.session_state["selected_preset"] = "base"
-    base_year5 = float(forecast["yhat"].iloc[48:60].sum())
+    if use_average:
+        base_year5 = float(forecast["yhat"].iloc[48:60].mean())
+    else:
+        base_year5 = float(forecast["yhat"].iloc[48:60].sum())
     selected_rows = scenarios[scenarios["scenario"] == selected_preset]
-    selected_year5 = float(selected_rows["yhat"].iloc[48:60].sum()) if not selected_rows.empty else base_year5
+    if use_average:
+        selected_year5 = (
+            float(selected_rows["yhat"].iloc[48:60].mean()) if not selected_rows.empty else base_year5
+        )
+    else:
+        selected_year5 = (
+            float(selected_rows["yhat"].iloc[48:60].sum()) if not selected_rows.empty else base_year5
+        )
     delta_year5 = selected_year5 - base_year5
 
     st.subheader("Data from SAC")
@@ -208,6 +251,7 @@ def main() -> None:
         provider_name = meta_raw.get("provider_name", "unknown")
         metric_name = meta_raw.get("metric_name", "unknown")
         unit = meta_raw.get("unit", "unknown")
+        output_mode = meta_raw.get("output_mode", "unknown")
         measure_used = meta_raw.get("measure_used", "unknown")
         aggregation = meta_raw.get("aggregation", "unknown")
         last_refresh = meta_raw.get("last_refresh_time", meta.last_refresh_time)
@@ -218,6 +262,7 @@ def main() -> None:
               <div class="meta-key">Provider</div><div class="meta-val">{provider_name}</div>
               <div class="meta-key">Metric</div><div class="meta-val">{metric_name}</div>
               <div class="meta-key">Unit</div><div class="meta-val">{unit}</div>
+              <div class="meta-key">Output</div><div class="meta-val">{output_mode}</div>
               <div class="meta-key">Currency</div><div class="meta-val">{currency or "unknown"}</div>
               <div class="meta-key">Measure</div><div class="meta-val">{measure_used}</div>
               <div class="meta-key">Aggregation</div><div class="meta-val">{aggregation}</div>
@@ -234,10 +279,16 @@ def main() -> None:
 
     st.subheader("Baseline forecast")
     k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Last actual (monthly)", f"{last_actual_value:,.0f} {currency}")
-    k2.metric("Next 12 months (base)", f"{next_12_total:,.0f} {currency}")
-    k3.metric("Year‑10 annualized (base)", f"{year10_total:,.0f} {currency}")
-    k4.metric("Delta vs base (year‑5)", f"{delta_year5:,.0f} {currency}")
+    value_suffix = f" {unit_label}".rstrip()
+    k1.metric("Last actual (monthly)", f"{last_actual_value:,.0f}{value_suffix}")
+    if use_average:
+        k2.metric("Next 12 months (avg)", f"{next_12_value:,.0f}{value_suffix}")
+        k3.metric("Year‑10 avg (base)", f"{year10_value:,.0f}{value_suffix}")
+        k4.metric("Delta vs base (year‑5 avg)", f"{delta_year5:,.0f}{value_suffix}")
+    else:
+        k2.metric("Next 12 months (base)", f"{next_12_value:,.0f}{value_suffix}")
+        k3.metric("Year‑10 annualized (base)", f"{year10_value:,.0f}{value_suffix}")
+        k4.metric("Delta vs base (year‑5)", f"{delta_year5:,.0f}{value_suffix}")
 
     st.divider()
     st.subheader("Scenarios")
@@ -356,9 +407,10 @@ def main() -> None:
     series_order = list(series_colors.keys())
     color_scale = alt.Scale(domain=series_order, range=[series_colors[name] for name in series_order])
 
+    y_title = metric_label if not title_unit else f"{metric_label} ({title_unit})"
     base_chart = alt.Chart(chart_df).mark_line().encode(
-        x="date:T",
-        y=alt.Y("y:Q", title=f"HR cost ({currency})"),
+        x=alt.X("date:T", axis=alt.Axis(format="%Y-%m")),
+        y=alt.Y("y:Q", title=y_title),
         color=alt.Color("series:N", scale=color_scale, legend=alt.Legend(title="Series")),
         tooltip=["series:N", "date:T", "y:Q"],
     )

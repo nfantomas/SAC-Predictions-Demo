@@ -5,25 +5,29 @@ from narrative.scenario_assistant import _build_prompts, suggest_scenario, valid
 
 def test_llm_missing_key_fallback(monkeypatch):
     monkeypatch.delenv("NARRATIVE_LLM_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
     result = suggest_scenario("trade wars", 10, {}, use_llm=True)
     assert result["mode"] == "llm_error"
     assert result.get("error") == "missing_llm_key"
 
 
 def test_invalid_llm_output_fallback(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
 
     def fake_generate(*args, **kwargs):
         raise Exception("invalid_llm_output")
 
-    monkeypatch.setattr("narrative.scenario_assistant.anthropic_generate", fake_generate)
+    monkeypatch.setattr("narrative.scenario_assistant.llm_generate", fake_generate)
     result = suggest_scenario("trade wars", 10, {}, use_llm=True)
     assert result["mode"] == "llm_error"
     assert result.get("error") == "invalid_llm_output"
 
 
 def test_llm_uninformative_fallback(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
 
     def fake_generate(*args, **kwargs):
@@ -44,7 +48,7 @@ def test_llm_uninformative_fallback(monkeypatch):
             },
         }
 
-    monkeypatch.setattr("narrative.scenario_assistant.anthropic_generate", fake_generate)
+    monkeypatch.setattr("narrative.scenario_assistant.llm_generate", fake_generate)
     result = suggest_scenario("asteroid impact", 10, {}, use_llm=True)
     assert result["mode"] == "llm_error"
     assert result.get("error") == "llm_uninformative"
@@ -56,6 +60,7 @@ def test_prompt_has_no_example_payload():
 
 
 def test_llm_inconsistent_fallback(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
 
     def fake_generate(*args, **kwargs):
@@ -76,7 +81,7 @@ def test_llm_inconsistent_fallback(monkeypatch):
             },
         }
 
-    monkeypatch.setattr("narrative.scenario_assistant.anthropic_generate", fake_generate)
+    monkeypatch.setattr("narrative.scenario_assistant.llm_generate", fake_generate)
     result = suggest_scenario("huge global growth thanks to ai leap forward", 10, {}, use_llm=True)
     assert result["mode"] == "llm_error"
     assert result.get("error") == "llm_inconsistent"
@@ -99,6 +104,7 @@ def test_normalize_shock_pct_percent():
 
 
 def test_golden_scenario_outputs(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
 
     def fake_generate(system_prompt, user_prompt, schema_hint=None):
@@ -193,7 +199,7 @@ def test_golden_scenario_outputs(monkeypatch):
             },
         }
 
-    monkeypatch.setattr("narrative.scenario_assistant.anthropic_generate", fake_generate)
+    monkeypatch.setattr("narrative.scenario_assistant.llm_generate", fake_generate)
 
     inputs = [
         "trade wars erupt between US and China",

@@ -11,6 +11,13 @@ HR cost = FTE (SignedData) × avg_cost_per_fte (monthly)
 Why: the `Cost` measure returns `null` for the locked slice in the current provider,
 so a direct cost series is not reliable for the demo.
 
+## Output mode (optional)
+By default the demo outputs **HR cost**. To output raw FTEs instead, set:
+```
+HR_SERIES_MODE=fte
+```
+In FTE mode, the series uses `SignedData` directly (no cost multiplier).
+
 Default demo value:
 - `avg_cost_per_fte_monthly = 8000`
 - Currency: **EUR** (demo default; update if your tenant uses a different currency)
@@ -47,10 +54,13 @@ curl -sS -G \
 ## Aggregation rule
 - **SUM by month** after filtering (duplicates are summed).
 - Date input is `YYYYMM`, normalized to `YYYY-MM-01`.
+  - For **FTE mode**, treat each month as a point-in-time value; use **average**
+    when reporting quarterly/annual FTEs (do not sum across months).
 
 ## Unit / currency
 - `SignedData` represents **FTE** count.
 - HR cost is derived as `FTE × avg_cost_per_fte_monthly` in **EUR** by default.
+- In `HR_SERIES_MODE=fte`, the output `value` is **FTE** (no currency).
 - If your tenant has an authoritative cost measure, update this document and set
   approach **A**.
 

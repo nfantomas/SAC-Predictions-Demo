@@ -81,6 +81,10 @@ def safe_config_summary(config: Config) -> Dict[str, str]:
         "SAC_PROVIDER_NAME": config.provider_name or "",
         "ANTHROPIC_API_KEY": mask_secret(os.getenv("ANTHROPIC_API_KEY", "")),
         "ANTHROPIC_MODEL": os.getenv("ANTHROPIC_MODEL", ""),
+        "OPENAI_API_KEY": mask_secret(os.getenv("OPENAI_API_KEY", "")),
+        "OPENAI_MODEL": os.getenv("OPENAI_MODEL", ""),
+        "OPENAI_API_BASE": os.getenv("OPENAI_API_BASE", ""),
+        "LLM_PROVIDER": os.getenv("LLM_PROVIDER", ""),
         "LLM_TIMEOUT_SECONDS": os.getenv("LLM_TIMEOUT_SECONDS", ""),
         "LLM_MAX_RETRIES": os.getenv("LLM_MAX_RETRIES", ""),
     }

@@ -46,3 +46,5 @@ curl -sS -G \
 ## Notes
 - The DES FactData endpoint requires **all key columns** in `$select`, even if
   filtered to constant values. This is why the query includes all dimensions.
+- Avoid forcing `$top`/`Prefer` for this provider; use the unpaged query and
+  follow `@odata.nextLink` only if the server returns it.

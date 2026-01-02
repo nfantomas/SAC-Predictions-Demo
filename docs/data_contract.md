@@ -6,6 +6,10 @@ This document defines the normalized dataset contract used by the demo pipeline.
 - `date` (string, ISO-8601 date, aligned to grain)
 - `value` (float or numeric string; coerced to float)
 
+`value` represents:
+- **HR cost** by default (derived from FTE × avg_cost_per_fte_monthly)
+- **FTE** when `HR_SERIES_MODE=fte`
+
 ## Optional fields
 - `dim_*` columns (string). Limit to 1–2 dimensions for the demo.
 - Example: `dim_region`, `dim_product`

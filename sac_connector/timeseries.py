@@ -59,17 +59,13 @@ def _build_headers(token_info: TokenInfo) -> Dict[str, str]:
     }
 
 
-def _row_signature(row: Dict) -> tuple:
-    return tuple(sorted(row.items()))
-
-
 def fetch_timeseries(
     provider_id: str,
     namespace_id: str = "sac",
     config: Optional[Config] = None,
     slice_spec: SliceSpec = DEFAULT_SLICE,
     max_rows: Optional[int] = None,
-    page_size: int = 1000,
+    page_size: Optional[int] = None,
     timeout: int = 30,
     max_attempts: int = 5,
 ) -> pd.DataFrame:
@@ -87,33 +83,25 @@ def fetch_timeseries(
         "$select": ",".join(select_fields),
         "$filter": _build_filter_clause(slice_spec.filters),
         "$orderby": slice_spec.orderby,
-        "$top": str(page_size),
     }
     base_url = (
         f"{cfg.tenant_url.rstrip('/')}/api/v1/dataexport/providers/"
         f"{namespace_id}/{provider_id}/FactData"
     )
-    url = base_url + "?" + parse.urlencode(params)
     headers = _build_headers(token_info)
 
     rows: List[Dict] = []
-    seen = set()
-    next_url: Optional[str] = url
-
+    next_url: Optional[str] = base_url + "?" + parse.urlencode(params)
+    # Prefer server-driven paging; avoid $skip/$top loops when possible.
     while next_url:
         payload = request_json_with_retry(
             next_url, headers=headers, timeout=timeout, max_attempts=max_attempts
         )
         page_rows = _extract_rows(payload)
-        for row in page_rows:
-            signature = _row_signature(row)
-            if signature in seen:
-                continue
-            seen.add(signature)
-            rows.append(row)
-            if max_rows and len(rows) >= max_rows:
-                next_url = None
-                break
+        rows.extend(page_rows)
+        if max_rows and len(rows) >= max_rows:
+            rows = rows[:max_rows]
+            break
         if next_url:
             next_url = _next_url(payload, next_url)
 

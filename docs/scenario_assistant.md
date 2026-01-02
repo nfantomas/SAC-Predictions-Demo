@@ -42,6 +42,11 @@ Enable “Debug LLM payload” in the UI to see:
 - LLM request payload (model, max_tokens, prompts)
 - LLM response (params + rationale)
 
+## LLM configuration
+- `LLM_PROVIDER=openai` with `OPENAI_API_KEY=...` (optional `OPENAI_MODEL`).
+- `LLM_PROVIDER=anthropic` with `ANTHROPIC_API_KEY=...` (optional `ANTHROPIC_MODEL`).
+- If `LLM_PROVIDER` is unset, the demo auto-selects based on which key is present.
+
 ## CLI checks
 - `poetry run python -m demo.llm_check`
 - `poetry run python -m demo.llm_scenario_check`

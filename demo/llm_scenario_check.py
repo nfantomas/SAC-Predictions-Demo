@@ -6,15 +6,16 @@ from pathlib import Path
 from config import load_env_file
 import os
 
-from llm.anthropic_provider import (
-    DEFAULT_MODEL,
+from llm.provider import (
+    LLMError,
     generate_json,
     get_last_raw_excerpt,
     get_last_raw_text,
     get_last_usage,
+    model_name,
+    provider_name,
 )
 from narrative.scenario_assistant import _build_prompts, _schema_hint, validate_and_normalize_suggestion
-from llm.provider import LLMError
 
 
 def main() -> int:
@@ -28,7 +29,8 @@ def main() -> int:
         prompts = _build_prompts(text, horizon_years, baseline_stats, correction_note=correction_note)
         return prompts, generate_json(prompts["system"], prompts["user"], schema_hint=_schema_hint())
 
-    print(f"Model: {os.getenv('ANTHROPIC_MODEL', DEFAULT_MODEL)}")
+    print(f"Provider: {provider_name()}")
+    print(f"Model: {model_name()}")
     print(f"Max tokens: {os.getenv('LLM_MAX_TOKENS', '')}")
     prompts = {}
     try:

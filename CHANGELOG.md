@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Fixed SAC timeseries pagination to preserve duplicate-looking facts for correct monthly FTE aggregation.
+- Switched SAC DES paging to server-driven nextLink without forced paging to keep totals consistent.
+- Added OpenAI LLM provider with auto-selection and updated LLM tooling to support ChatGPT keys.
+- Added FTE output mode and adjusted UI labels/KPIs to avoid summing headcount metrics.
 - Simplified demo UI to a single combined chart placed above scenario controls.
 - Hid SAC data details and sample rows behind expanders; removed narrative UI.
 - Made Scenario Overrides collapsible to reduce visual clutter.

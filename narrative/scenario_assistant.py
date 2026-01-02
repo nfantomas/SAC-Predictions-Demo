@@ -7,8 +7,13 @@ from pathlib import Path
 import re
 from typing import Dict, Iterable, Optional, Tuple
 
-from narrative.anthropic_client import generate_json as anthropic_generate
-from llm.provider import LLMError
+from llm.provider import (
+    LLMError,
+    generate_json as llm_generate,
+    has_llm_key,
+    model_name,
+    provider_name,
+)
 
 PROMPT_PATH = Path("llm/prompts/scenario_assistant_v2.txt")
 
@@ -43,7 +48,8 @@ def _schema_hint() -> Dict[str, object]:
 
 def _llm_request_preview(prompts: Dict[str, str]) -> Dict[str, object]:
     return {
-        "model": os.getenv("ANTHROPIC_MODEL", "claude-opus-4-20250514"),
+        "provider": provider_name(),
+        "model": model_name(),
         "max_tokens": int(os.getenv("LLM_MAX_TOKENS", "2048")),
         "stop_sequences": [item.strip() for item in os.getenv("LLM_STOP_SEQUENCES", "").split(",") if item.strip()],
         "system": prompts.get("system", ""),
@@ -350,7 +356,7 @@ def suggest_scenario(
     prompts = _build_prompts(indications_text, horizon_years, baseline_stats)
     sentiment = _classify_text_sentiment(indications_text.lower())
 
-    if not os.getenv("ANTHROPIC_API_KEY"):
+    if not has_llm_key():
         return {
             "mode": "llm_error",
             "error": "missing_llm_key",
@@ -362,7 +368,7 @@ def suggest_scenario(
         attempt_prompts = _build_prompts(
             indications_text, horizon_years, baseline_stats, correction_note=correction_note
         )
-        output = anthropic_generate(attempt_prompts["system"], attempt_prompts["user"], _schema_hint())
+        output = llm_generate(attempt_prompts["system"], attempt_prompts["user"], _schema_hint())
         if not isinstance(output, dict) or "params" not in output or "rationale" not in output:
             raise LLMError("invalid_llm_output")
         params, consistency, warnings = validate_and_normalize_suggestion(
@@ -415,7 +421,8 @@ def suggest_scenario(
             "warnings": output.get("warnings", []),
             "llm_request": output["llm_request"],
             "prompts": output["prompts"],
-            "llm_model": os.getenv("ANTHROPIC_MODEL", ""),
+            "llm_model": model_name(),
+            "llm_provider": provider_name(),
         }
         _write_debug_log({"mode": "llm", "prompts": output["prompts"], "suggestion": output})
         return result

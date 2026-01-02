@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from llm.anthropic_provider import generate_json
-from llm.provider import LLMError
+from llm.provider import LLMError, generate_json
 
 
 def main() -> int:

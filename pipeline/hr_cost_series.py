@@ -20,6 +20,7 @@ class HrCostMeta:
     filters_used: Dict[str, str]
     grain: str
     aggregation: str
+    output_mode: str
     provider_id: str
     namespace_id: str
     provider_name: str
@@ -40,6 +41,7 @@ def _build_hr_cost_meta(provider_id: str, namespace_id: str, provider_name: str)
         filters_used=mapping.filters,
         grain=mapping.grain,
         aggregation="sum_by_month",
+        output_mode=mapping.output_mode,
         provider_id=provider_id,
         namespace_id=namespace_id,
         provider_name=provider_name,
@@ -67,7 +69,7 @@ def get_hr_cost_series(
         if df.empty:
             raise CacheError("Fixture is empty.")
         mapping = get_metric_mapping()
-        if mapping.measure != "Cost":
+        if mapping.calculation == "fte_times_avg_cost":
             df["value"] = df["value"].astype(float) * DEFAULT_AVG_COST_PER_FTE
         else:
             df["value"] = df["value"].astype(float)
@@ -99,7 +101,7 @@ def get_hr_cost_series(
     except NormalizeError as exc:
         raise CacheError(str(exc)) from exc
 
-    if mapping.measure != "Cost":
+    if mapping.calculation == "fte_times_avg_cost":
         normalized["value"] = normalized["value"].astype(float) * DEFAULT_AVG_COST_PER_FTE
     else:
         normalized["value"] = normalized["value"].astype(float)

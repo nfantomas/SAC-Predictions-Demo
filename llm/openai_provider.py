@@ -11,7 +11,7 @@ from llm.json_parse import parse_llm_json, sanitize_excerpt
 from llm.provider import LLMError
 
 
-DEFAULT_MODEL = "claude-opus-4-20250514"
+DEFAULT_MODEL = "gpt-4o-mini"
 _LAST_RAW_TEXT = ""
 _LAST_RAW_EXCERPT = ""
 _LAST_USAGE = {}
@@ -33,42 +33,47 @@ def _ensure_env_loaded() -> None:
     load_env_file(".env", override=False)
 
 
+def _build_headers(api_key: str) -> Dict[str, str]:
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    org_id = (os.getenv("OPENAI_ORG_ID") or "").strip()
+    if org_id:
+        headers["OpenAI-Organization"] = org_id
+    project_id = (os.getenv("OPENAI_PROJECT") or "").strip()
+    if project_id:
+        headers["OpenAI-Project"] = project_id
+    return headers
+
+
 def _request_payload(system_prompt: str, user_prompt: str, model: str, max_tokens: int) -> Dict[str, Any]:
     payload = {
         "model": model,
-        "max_tokens": max_tokens,
-        "system": system_prompt,
         "messages": [
-            {
-                "role": "user",
-                "content": [{"type": "text", "text": user_prompt}],
-            }
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
         ],
+        "temperature": 0,
+        "max_tokens": max_tokens,
     }
     stop_env = os.getenv("LLM_STOP_SEQUENCES", "")
     stop_sequences = [item.strip() for item in stop_env.split(",") if item.strip()]
     if stop_sequences:
-        payload["stop_sequences"] = stop_sequences
+        payload["stop"] = stop_sequences
     return payload
 
 
 def list_models() -> List[str]:
     _ensure_env_loaded()
-    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip().strip('"').strip("'")
+    api_key = (os.getenv("OPENAI_API_KEY") or "").strip().strip('"').strip("'")
     if not api_key:
         raise LLMError("missing_llm_key")
 
     timeout = int(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
-    base = os.getenv("ANTHROPIC_API_BASE", "https://api.anthropic.com").rstrip("/")
+    base = os.getenv("OPENAI_API_BASE", "https://api.openai.com").rstrip("/")
     url = f"{base}/v1/models"
-    headers = {
-        "Content-Type": "application/json",
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-    }
-    beta = os.getenv("ANTHROPIC_BETA")
-    if beta:
-        headers["anthropic-beta"] = beta
+    headers = _build_headers(api_key)
 
     try:
         req = request.Request(url, headers=headers, method="GET")
@@ -91,33 +96,28 @@ def list_models() -> List[str]:
     return models
 
 
-def generate_json(system_prompt: str, user_prompt: str, schema_hint: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def generate_json(
+    system_prompt: str,
+    user_prompt: str,
+    schema_hint: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     _ensure_env_loaded()
-    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip().strip('"').strip("'")
+    api_key = (os.getenv("OPENAI_API_KEY") or "").strip().strip('"').strip("'")
     if not api_key:
         raise LLMError("missing_llm_key")
 
-    model = os.getenv("ANTHROPIC_MODEL", DEFAULT_MODEL)
+    model = (os.getenv("OPENAI_MODEL") or DEFAULT_MODEL).strip() or DEFAULT_MODEL
     timeout = int(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
     max_retries = int(os.getenv("LLM_MAX_RETRIES", "2"))
     max_tokens = int(os.getenv("LLM_MAX_TOKENS", "2048"))
-    base = os.getenv("ANTHROPIC_API_BASE", "https://api.anthropic.com").rstrip("/")
+    base = os.getenv("OPENAI_API_BASE", "https://api.openai.com").rstrip("/")
+    url = f"{base}/v1/chat/completions"
 
-    payload = _request_payload(system_prompt, user_prompt, model, max_tokens)
     if schema_hint:
-        payload["system"] = f"{system_prompt}\nReturn JSON matching this schema: {schema_hint}"
-
+        system_prompt = f"{system_prompt}\nReturn JSON matching this schema: {schema_hint}"
+    payload = _request_payload(system_prompt, user_prompt, model, max_tokens)
     data = json.dumps(payload).encode("utf-8")
-    headers = {
-        "Content-Type": "application/json",
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-    }
-    beta = os.getenv("ANTHROPIC_BETA")
-    if beta:
-        headers["anthropic-beta"] = beta
-    base = os.getenv("ANTHROPIC_API_BASE", "https://api.anthropic.com").rstrip("/")
-    url = f"{base}/v1/messages"
+    headers = _build_headers(api_key)
 
     for attempt in range(max_retries + 1):
         try:
@@ -146,20 +146,20 @@ def generate_json(system_prompt: str, user_prompt: str, schema_hint: Optional[Di
                 continue
             raise LLMError("llm_timeout") from exc
 
-        content = parsed.get("content") or []
-        text = ""
-        for block in content:
-            if block.get("type") == "text":
-                text += block.get("text", "")
-        if not text:
+        choices = parsed.get("choices", [])
+        content = ""
+        if choices:
+            message = choices[0].get("message", {})
+            content = message.get("content") or ""
+        if not content:
             raise LLMError("invalid_llm_output")
         global _LAST_RAW_TEXT
         global _LAST_RAW_EXCERPT
-        _LAST_RAW_TEXT = text
-        _LAST_RAW_EXCERPT = sanitize_excerpt(text)
+        _LAST_RAW_TEXT = content
+        _LAST_RAW_EXCERPT = sanitize_excerpt(content)
 
         try:
-            return parse_llm_json(text)
+            return parse_llm_json(content)
         except ValueError as exc:
             raise LLMError("invalid_llm_output") from exc
 

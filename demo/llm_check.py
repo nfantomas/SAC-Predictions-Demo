@@ -1,8 +1,11 @@
-import os
-
 from config import load_env_file
-from llm.anthropic_provider import DEFAULT_MODEL, generate_json, list_models
-from llm.provider import LLMError
+from llm.provider import (
+    LLMError,
+    generate_json,
+    list_models,
+    model_name,
+    provider_name,
+)
 
 
 def main() -> int:
@@ -17,8 +20,10 @@ def main() -> int:
         print(f"LLM ERROR ({reason})")
         return 1
 
-    model = os.getenv("ANTHROPIC_MODEL", DEFAULT_MODEL)
+    provider = provider_name()
+    model = model_name()
     print(f"Models found: {len(models)}")
+    print(f"Provider: {provider}")
     print(f"Selected model: {model}")
     if model not in models:
         print("LLM ERROR (model_not_available)")
@@ -35,7 +40,7 @@ def main() -> int:
         print(f"LLM ERROR ({exc})")
         return 1
 
-    print(f"LLM OK (anthropic, model={model})")
+    print(f"LLM OK ({provider}, model={model})")
     return 0
 
 
