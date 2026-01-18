@@ -97,7 +97,13 @@ def get_hr_cost_series(
         slice_spec=SliceSpec(measure=mapping.measure, filters=mapping.filters),
     )
     try:
-        normalized = normalize_timeseries(raw_df, NormalizeSpec(value_field=mapping.measure))
+        normalized = normalize_timeseries(
+            raw_df,
+            NormalizeSpec(
+                value_field=mapping.measure,
+                allow_non_numeric=(mapping.measure != "SignedData"),
+            ),
+        )
     except NormalizeError as exc:
         raise CacheError(str(exc)) from exc
 

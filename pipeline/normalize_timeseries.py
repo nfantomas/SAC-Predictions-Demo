@@ -15,6 +15,7 @@ class NormalizeSpec:
     value_field: str = "SignedData"
     grain: str = "month"
     aggregate: str = "sum"
+    allow_non_numeric: bool = False
 
 
 def _parse_yyyymm(value: str) -> date:
@@ -43,7 +44,12 @@ def normalize_timeseries(
     working[spec.value_field] = pd.to_numeric(working[spec.value_field], errors="coerce")
 
     if working[spec.value_field].isna().any():
-        raise NormalizeError("Non-numeric values found in measure column.")
+        if spec.allow_non_numeric:
+            working = working.dropna(subset=[spec.value_field])
+            if working.empty:
+                raise NormalizeError("No numeric values found in measure column.")
+        else:
+            raise NormalizeError("Non-numeric values found in measure column.")
 
     working["date"] = working[spec.date_field].map(lambda d: d.isoformat())
     working["value"] = working[spec.value_field].astype(float)
