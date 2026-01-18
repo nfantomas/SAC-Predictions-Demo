@@ -17,14 +17,28 @@ from scenarios.validate import validate_params
 from ui.scenario_controls import validate_overrides
 
 
-CACHE_SERIES = Path("data/cache/sac_export.csv")
+CACHE_SERIES_PRIMARY = Path("data/cache/sac_export_cost.csv")
+CACHE_SERIES_FALLBACK = Path("data/cache/sac_export.csv")
 CACHE_FORECAST = Path("data/cache/forecast.csv")
 CACHE_SCENARIOS = Path("data/cache/scenarios.csv")
 
 
+def _safe_error_text(value: object) -> str:
+    try:
+        text = str(value)
+    except Exception:
+        return "unknown error"
+    try:
+        text.encode("utf-8")
+        return text
+    except UnicodeEncodeError:
+        return text.encode("ascii", "replace").decode("ascii")
+
+
 def _load_series():
-    rows, meta = load_cache(data_path=str(CACHE_SERIES))
-    return rows, meta
+    series_path = CACHE_SERIES_PRIMARY if CACHE_SERIES_PRIMARY.exists() else CACHE_SERIES_FALLBACK
+    rows, meta = load_cache(data_path=str(series_path))
+    return rows, meta, series_path
 
 
 def _display_metric_name(metric_name: str) -> str:
@@ -145,7 +159,7 @@ def main() -> None:
     _inject_styles()
 
     try:
-        rows, meta = _load_series()
+        rows, meta, series_path = _load_series()
         meta_raw = load_cache_meta_raw()
     except CacheError:
         st.error("Series cache missing. Run `python -m demo.refresh --source sac` first.")
@@ -237,7 +251,7 @@ def main() -> None:
 
     if st.button("Refresh from SAC", use_container_width=True):
         with st.spinner("Running refresh → forecast → scenarios..."):
-            result = run_all()
+            result = run_all(cache_path=str(series_path))
         if result["ok"]:
             st.session_state["refresh_status"] = {
                 "ok": True,
@@ -450,10 +464,13 @@ def main() -> None:
                 key="growth_delta_pct_widget",
             )
             year_options = ["(none)"] + [str(year) for year in forecast_years]
+            default_year_choice = defaults["shock_year_choice"]
+            if default_year_choice not in year_options:
+                default_year_choice = "(none)"
             shock_year_choice = st.selectbox(
                 "Shock year (optional)",
                 year_options,
-                index=year_options.index(defaults["shock_year_choice"]),
+                index=year_options.index(default_year_choice),
                 key="shock_year_choice_widget",
             )
             shock_pct = st.slider(
@@ -517,7 +534,10 @@ def main() -> None:
             label += f" (model: {model})"
         st.markdown(label)
         if mode == "llm_error":
-            st.error(f"LLM error: {suggestion.get('error')}")
+            st.error(f"LLM error: {_safe_error_text(suggestion.get('error'))}")
+            raw_excerpt = suggestion.get("llm_raw_excerpt")
+            if raw_excerpt and st.checkbox("Show raw LLM excerpt", value=False, key="llm_raw_excerpt_checkbox"):
+                st.code(raw_excerpt)
             if st.checkbox("Debug LLM payload", value=False):
                 llm_request = suggestion.get("llm_request", {})
                 if llm_request:

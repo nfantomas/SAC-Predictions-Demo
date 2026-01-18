@@ -11,7 +11,8 @@ from llm.json_parse import parse_llm_json, sanitize_excerpt
 from llm.provider import LLMError
 
 
-DEFAULT_MODEL = "claude-opus-4-20250514"
+# Default to a lightweight model to reduce latency; override via ANTHROPIC_MODEL.
+DEFAULT_MODEL = "claude-3-haiku-20240307"
 _LAST_RAW_TEXT = ""
 _LAST_RAW_EXCERPT = ""
 _LAST_USAGE = {}
@@ -31,6 +32,33 @@ def get_last_usage() -> Dict[str, Any]:
 
 def _ensure_env_loaded() -> None:
     load_env_file(".env", override=False)
+
+
+def _clean_api_key(key: str) -> str:
+    # Anthropic expects ASCII header values; strip quotes, whitespace, ellipsis, and non-ASCII.
+    key = key.strip().strip('"').strip("'")
+    key = key.replace("\u2026", "...")  # common when pasting a masked key
+    key = key.encode("ascii", "ignore").decode("ascii")
+    return key
+
+
+def _resolve_api_key() -> str:
+    _ensure_env_loaded()
+    key = _clean_api_key(os.getenv("ANTHROPIC_API_KEY") or "")
+    if (not key) or key.lower().startswith("your_") or "<" in key:
+        load_env_file(".env", override=True)
+        key = _clean_api_key(os.getenv("ANTHROPIC_API_KEY") or "")
+    return key
+
+
+def _resolve_base_url() -> str:
+    _ensure_env_loaded()
+    base = (os.getenv("ANTHROPIC_API_BASE") or "https://api.anthropic.com").strip()
+    for suffix in ("/v1/messages", "/v1/messages/", "/v1/", "/v1"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    return base.rstrip("/")
 
 
 def _request_payload(system_prompt: str, user_prompt: str, model: str, max_tokens: int) -> Dict[str, Any]:
@@ -53,13 +81,12 @@ def _request_payload(system_prompt: str, user_prompt: str, model: str, max_token
 
 
 def list_models() -> List[str]:
-    _ensure_env_loaded()
-    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip().strip('"').strip("'")
+    api_key = _resolve_api_key()
     if not api_key:
         raise LLMError("missing_llm_key")
 
-    timeout = int(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
-    base = os.getenv("ANTHROPIC_API_BASE", "https://api.anthropic.com").rstrip("/")
+    timeout = int(os.getenv("LLM_TIMEOUT_SECONDS", "600"))
+    base = _resolve_base_url()
     url = f"{base}/v1/models"
     headers = {
         "Content-Type": "application/json",
@@ -92,17 +119,14 @@ def list_models() -> List[str]:
 
 
 def generate_json(system_prompt: str, user_prompt: str, schema_hint: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    _ensure_env_loaded()
-    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip().strip('"').strip("'")
+    api_key = _resolve_api_key()
     if not api_key:
         raise LLMError("missing_llm_key")
 
-    model = os.getenv("ANTHROPIC_MODEL", DEFAULT_MODEL)
-    timeout = int(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
-    max_retries = int(os.getenv("LLM_MAX_RETRIES", "2"))
-    max_tokens = int(os.getenv("LLM_MAX_TOKENS", "2048"))
-    base = os.getenv("ANTHROPIC_API_BASE", "https://api.anthropic.com").rstrip("/")
-
+    model = (os.getenv("ANTHROPIC_MODEL") or DEFAULT_MODEL).strip() or DEFAULT_MODEL
+    timeout = int(os.getenv("LLM_TIMEOUT_SECONDS", "600"))
+    max_retries = int(os.getenv("LLM_MAX_RETRIES", "3"))
+    max_tokens = int(os.getenv("LLM_MAX_TOKENS", "4096"))
     payload = _request_payload(system_prompt, user_prompt, model, max_tokens)
     if schema_hint:
         payload["system"] = f"{system_prompt}\nReturn JSON matching this schema: {schema_hint}"
@@ -116,7 +140,7 @@ def generate_json(system_prompt: str, user_prompt: str, schema_hint: Optional[Di
     beta = os.getenv("ANTHROPIC_BETA")
     if beta:
         headers["anthropic-beta"] = beta
-    base = os.getenv("ANTHROPIC_API_BASE", "https://api.anthropic.com").rstrip("/")
+    base = _resolve_base_url()
     url = f"{base}/v1/messages"
 
     for attempt in range(max_retries + 1):
@@ -160,7 +184,8 @@ def generate_json(system_prompt: str, user_prompt: str, schema_hint: Optional[Di
 
         try:
             return parse_llm_json(text)
-        except ValueError as exc:
-            raise LLMError("invalid_llm_output") from exc
+        except ValueError:
+            # Preserve raw text for debugging.
+            raise LLMError("invalid_llm_output")
 
     raise LLMError("llm_unknown")

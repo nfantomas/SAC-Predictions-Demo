@@ -24,6 +24,7 @@ class MetricMapping:
 
 _ALLOWED_MEASURES = {"SignedData", "Cost"}
 _ALLOWED_OUTPUT_MODES = {"cost", "fte"}
+_DEFAULT_COST_FILTERS = {"Version": "public.Forecast", "DataSource": "General"}
 
 
 def _load_output_mode() -> str:
@@ -35,9 +36,11 @@ def _load_output_mode() -> str:
     return raw
 
 
-def _load_filters() -> Dict[str, str]:
+def _load_filters(output_mode: str) -> Dict[str, str]:
     raw = os.getenv("HR_COST_FILTERS_JSON", "").strip()
     if not raw:
+        if output_mode == "cost":
+            return dict(_DEFAULT_COST_FILTERS)
         return dict(DEFAULT_SLICE.filters)
     try:
         parsed = json.loads(raw)
@@ -55,7 +58,8 @@ def _load_filters() -> Dict[str, str]:
 
 def get_metric_mapping() -> MetricMapping:
     output_mode = _load_output_mode()
-    measure = os.getenv("HR_COST_MEASURE", "SignedData").strip()
+    default_measure = "Cost" if output_mode == "cost" else "SignedData"
+    measure = os.getenv("HR_COST_MEASURE", default_measure).strip()
     if measure not in _ALLOWED_MEASURES:
         raise MetricMappingError(
             f"Unsupported HR_COST_MEASURE '{measure}'. Allowed: {', '.join(sorted(_ALLOWED_MEASURES))}."
@@ -66,7 +70,7 @@ def get_metric_mapping() -> MetricMapping:
     if output_mode == "cost":
         currency = os.getenv("HR_COST_CURRENCY", "EUR").strip() or "EUR"
     grain = os.getenv("HR_COST_GRAIN", "month").strip() or "month"
-    filters = _load_filters()
+    filters = _load_filters(output_mode)
     if output_mode == "fte":
         calculation = "raw_fte"
     else:

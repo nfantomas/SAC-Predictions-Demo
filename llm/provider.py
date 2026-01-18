@@ -13,10 +13,9 @@ class LLMError(Exception):
 def _select_provider() -> str:
     load_env_file(".env", override=False)
     provider = (os.getenv("LLM_PROVIDER") or "").strip().lower()
-    if provider in ("openai", "anthropic"):
+    if provider == "anthropic":
         return provider
-    if (os.getenv("OPENAI_API_KEY") or "").strip():
-        return "openai"
+    # Only Anthropic is supported.
     if (os.getenv("ANTHROPIC_API_KEY") or "").strip():
         return "anthropic"
     return "anthropic"
@@ -28,17 +27,11 @@ def provider_name() -> str:
 
 def has_llm_key() -> bool:
     provider = _select_provider()
-    if provider == "openai":
-        return bool((os.getenv("OPENAI_API_KEY") or "").strip())
     return bool((os.getenv("ANTHROPIC_API_KEY") or "").strip())
 
 
 def default_model() -> str:
     provider = _select_provider()
-    if provider == "openai":
-        from llm.openai_provider import DEFAULT_MODEL
-
-        return DEFAULT_MODEL
     from llm.anthropic_provider import DEFAULT_MODEL
 
     return DEFAULT_MODEL
@@ -46,17 +39,11 @@ def default_model() -> str:
 
 def model_name() -> str:
     provider = _select_provider()
-    if provider == "openai":
-        return (os.getenv("OPENAI_MODEL") or default_model()).strip() or default_model()
     return (os.getenv("ANTHROPIC_MODEL") or default_model()).strip() or default_model()
 
 
 def list_models() -> List[str]:
     provider = _select_provider()
-    if provider == "openai":
-        from llm.openai_provider import list_models as impl
-
-        return impl()
     from llm.anthropic_provider import list_models as impl
 
     return impl()
@@ -68,10 +55,6 @@ def generate_json(
     schema_hint: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     provider = _select_provider()
-    if provider == "openai":
-        from llm.openai_provider import generate_json as impl
-
-        return impl(system_prompt, user_prompt, schema_hint=schema_hint)
     from llm.anthropic_provider import generate_json as impl
 
     return impl(system_prompt, user_prompt, schema_hint=schema_hint)
@@ -79,10 +62,6 @@ def generate_json(
 
 def get_last_raw_text() -> str:
     provider = _select_provider()
-    if provider == "openai":
-        from llm.openai_provider import get_last_raw_text as impl
-
-        return impl()
     from llm.anthropic_provider import get_last_raw_text as impl
 
     return impl()
@@ -90,10 +69,6 @@ def get_last_raw_text() -> str:
 
 def get_last_raw_excerpt() -> str:
     provider = _select_provider()
-    if provider == "openai":
-        from llm.openai_provider import get_last_raw_excerpt as impl
-
-        return impl()
     from llm.anthropic_provider import get_last_raw_excerpt as impl
 
     return impl()
@@ -101,10 +76,6 @@ def get_last_raw_excerpt() -> str:
 
 def get_last_usage() -> Dict[str, Any]:
     provider = _select_provider()
-    if provider == "openai":
-        from llm.openai_provider import get_last_usage as impl
-
-        return impl()
     from llm.anthropic_provider import get_last_usage as impl
 
     return impl()

@@ -15,6 +15,15 @@ def test_metric_mapping_filters_override(monkeypatch):
     assert mapping.filters["Version"] == "public.Actual"
 
 
+def test_metric_mapping_cost_defaults():
+    # No env overrides; defaults should pick cost measure and forecast/general filters
+    mapping = get_metric_mapping()
+    assert mapping.measure == "Cost"
+    assert mapping.output_mode == "cost"
+    assert mapping.filters == {"Version": "public.Forecast", "DataSource": "General"}
+    assert mapping.calculation == "direct_measure"
+
+
 def test_metric_mapping_fte_mode(monkeypatch):
     monkeypatch.setenv("HR_SERIES_MODE", "fte")
     mapping = get_metric_mapping()

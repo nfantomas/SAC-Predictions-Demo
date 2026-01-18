@@ -13,6 +13,7 @@ from llm.provider import (
     has_llm_key,
     model_name,
     provider_name,
+    get_last_raw_excerpt,
 )
 
 PROMPT_PATH = Path("llm/prompts/scenario_assistant_v2.txt")
@@ -50,7 +51,7 @@ def _llm_request_preview(prompts: Dict[str, str]) -> Dict[str, object]:
     return {
         "provider": provider_name(),
         "model": model_name(),
-        "max_tokens": int(os.getenv("LLM_MAX_TOKENS", "2048")),
+        "max_tokens": int(os.getenv("LLM_MAX_TOKENS", "4096")),
         "stop_sequences": [item.strip() for item in os.getenv("LLM_STOP_SEQUENCES", "").split(",") if item.strip()],
         "system": prompts.get("system", ""),
         "user": prompts.get("user", ""),
@@ -343,7 +344,12 @@ def _build_prompts(
         max_year=max_year,
         correction_note=correction_note.strip(),
     )
-    system_prompt = "Return JSON only. Do not include markdown, code fences, or commentary."
+    system_prompt = (
+        "Return one single-line, valid JSON object only. "
+        "Use double quotes for all keys/strings. "
+        "No markdown, no code fences, no ellipsis, no extra prose. "
+        "Keep the entire response under 1200 characters."
+    )
     return {"system": system_prompt, "user": user_prompt}
 
 
@@ -447,21 +453,23 @@ def suggest_scenario(
             correction_label = "LLM corrected for JSON validity."
 
         if correction:
-            try:
-                output = _attempt(correction_note=correction)
-                result = {
-                    "mode": "llm",
-                    "params": output["params"],
-                    "rationale": output["rationale"],
-                    "warnings": output.get("warnings", []) + [correction_label],
-                    "llm_request": output["llm_request"],
-                    "prompts": output["prompts"],
-                    "llm_model": os.getenv("ANTHROPIC_MODEL", ""),
-                }
-                _write_debug_log({"mode": "llm", "prompts": output["prompts"], "suggestion": output})
-                return result
-            except Exception as retry_exc:
-                reason = str(retry_exc)
+            # Try one or two corrective passes with stricter guidance.
+            for note in (correction, correction + " Return a single valid JSON object only; no prose."):
+                try:
+                    output = _attempt(correction_note=note)
+                    result = {
+                        "mode": "llm",
+                        "params": output["params"],
+                        "rationale": output["rationale"],
+                        "warnings": output.get("warnings", []) + [correction_label],
+                        "llm_request": output["llm_request"],
+                        "prompts": output["prompts"],
+                        "llm_model": os.getenv("ANTHROPIC_MODEL", ""),
+                    }
+                    _write_debug_log({"mode": "llm", "prompts": output["prompts"], "suggestion": output})
+                    return result
+                except Exception as retry_exc:
+                    reason = str(retry_exc)
 
         if "invalid_llm_output" in reason:
             reason = "invalid_llm_output"
@@ -471,10 +479,15 @@ def suggest_scenario(
             reason = "llm_uninformative"
         elif "llm_inconsistent" in reason:
             reason = "llm_inconsistent"
-        _write_debug_log({"mode": "llm_error", "prompts": prompts, "error": reason})
+        raw_excerpt = get_last_raw_excerpt()
+        log_entry = {"mode": "llm_error", "prompts": prompts, "error": reason}
+        if raw_excerpt:
+            log_entry["llm_raw_excerpt"] = raw_excerpt
+        _write_debug_log(log_entry)
         return {
             "mode": "llm_error",
             "error": reason,
             "llm_request": _llm_request_preview(prompts),
             "prompts": prompts,
+            "llm_raw_excerpt": raw_excerpt if raw_excerpt else None,
         }
