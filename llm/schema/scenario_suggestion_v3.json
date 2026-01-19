@@ -1,0 +1,44 @@
+{
+  "suggested_driver": "cost|fte|cost_target",
+  "params": {
+    "driver": "cost|fte|cost_target",
+    "lag_months": 0,
+    "onset_duration_months": 0,
+    "event_duration_months": null,
+    "recovery_duration_months": null,
+    "shape": "step|linear|exp",
+    "impact_mode": "level|growth",
+    "impact_magnitude": 0.0,
+    "growth_delta_pp_per_year": 0.0,
+    "drift_pp_per_year": 0.0,
+    "event_growth_delta_pp_per_year": null,
+    "event_growth_exp_multiplier": null,
+    "post_event_growth_pp_per_year": null,
+    "fte_delta_abs": null,
+    "fte_delta_pct": null,
+    "beta_multiplier": null,
+    "cost_target_pct": null
+  },
+  "rationale": {
+    "title": "string",
+    "summary": "string",
+    "assumptions": [
+      "string"
+    ],
+    "why_these_numbers": [
+      "string"
+    ],
+    "sanity_checks": {
+      "ten_year_multiplier_estimate": 0.0,
+      "notes": "string"
+    }
+  },
+  "safety": {
+    "adjustments": [
+      "string"
+    ],
+    "warnings": [
+      "string"
+    ]
+  }
+}

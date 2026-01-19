@@ -52,9 +52,12 @@ def test_regression_fixture_tolerance():
     result = run_baseline(
         df,
         horizon_months=3,
-        method="cagr",
-        config=BaselineConfig(cagr_damping=0.0),
-    )
-    expected = [103.0, 103.0, 103.0]
-    for idx, value in enumerate(expected):
-        assert result["yhat"].iloc[idx] == pytest.approx(value, rel=0.01)
+            method="cagr",
+            config=BaselineConfig(cagr_damping=0.0),
+        )
+    # With baseline growth floor, forecast should continue upward from last observed.
+    last_obs = 103.0
+    min_monthly_rate = (1 + BaselineConfig().baseline_growth_ppy) ** (1 / 12.0) - 1
+    expected_min = last_obs * (1 + min_monthly_rate)
+    assert result["yhat"].iloc[0] >= expected_min * 0.99
+    assert list(result["yhat"]) == sorted(result["yhat"])

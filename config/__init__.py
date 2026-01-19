@@ -1,27 +1,30 @@
-import os
-
 from config.core import (
     Config,
     ConfigError,
     SECRET_KEYS,
+    BASELINE_INFLATION_PPY,
+    BASELINE_GROWTH_YOY,
+    BASELINE_FTE_GROWTH_YOY,
     load_config,
     load_env_file,
     mask_secret,
     safe_config_summary,
     safe_env_snapshot,
 )
-
-# Baseline inflation (per year) used for default upward drift in forecasts.
-BASELINE_INFLATION_PPY = float(os.getenv("BASELINE_INFLATION_PPY", 0.03))
+from config.assumptions import Assumptions, DEFAULT_ASSUMPTIONS
 
 __all__ = [
     "Config",
     "ConfigError",
     "SECRET_KEYS",
+    "BASELINE_INFLATION_PPY",
+    "BASELINE_GROWTH_YOY",
+    "BASELINE_FTE_GROWTH_YOY",
     "load_config",
     "load_env_file",
     "mask_secret",
     "safe_config_summary",
     "safe_env_snapshot",
-    "BASELINE_INFLATION_PPY",
+    "Assumptions",
+    "DEFAULT_ASSUMPTIONS",
 ]

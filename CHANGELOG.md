@@ -10,6 +10,22 @@
 - Made Scenario Overrides collapsible to reduce visual clutter.
 - Preserved SAC/fixture metadata on refresh so UI shows provider/metric/unit/currency.
 - Tweaked refresh banner to a neutral caption (no warning highlight).
+- Added cost↔FTE driver model with t0 mismatch guardrail, default assumptions, and V3 scenario presets with implied FTE cut messaging.
+- Added scenario assistant V3 prompt/schema + check script, plus safety validator with bounds and projection clamp for LLM outputs.
+- Added AI Scenario Assistant (V3) UI block with driver-aware apply pipeline, mismatch warning banner, and chart overlay alongside existing V2 flows.
+- Documented scenario engine V3 (timeline, driver model, safety) and added offline smoke runner (`demo.scenario_smoke_v3`) that prints SCENARIO V3 SMOKE OK.
+- Added V3 HR preset specs doc, preset factory, FTE cut planner, and apply_v3 support for beta multipliers, inflation, and cost targets.
+- Wired V3 HR presets and cost-target plan into UI alongside legacy V2 presets; apply_v3 used for overlays.
+- Added preset-mapping assistant (V3) with deterministic keyword routing, prompt template, and tests for mapping.
+- Added scenario engine V3 schema/migration with ramp profiles and lag/onset/recovery timeline helper plus compatibility tests.
+- Updated V3 presets to manager-friendly parameter bands with driver-consistent baseline math and Year-1 impact regression test.
+- Simplified chart to show baseline + one preset/assistant line (optional custom), added KPI chips (t0, Year‑1/5/10 deltas, implied FTE), and surfaced alpha/beta/inflation assumptions.
+- Refreshed V3 LLM prompt/schema with explicit alpha/beta/FTE/inflation assumptions, safety bounds, driver-aware params, and fenced-JSON rejection test for deterministic parsing.
+- Added dedicated V3 LLM validator that clamps unsafe params (bounds + 10y multiplier + alpha floor) and raises on out-of-bounds projections with tests.
+- Added pending-apply flow for V3 suggestions (no widget mutations), helper utilities, and tests so suggest→apply is stable and idempotent.
+- Added M10 demo acceptance checklist covering baseline trend, presets, LLM assistant, guardrails, and SAC connectivity smokes.
+- Added baseline growth defaults (6% YoY total with 3% inflation + 3% FTE growth components), config knobs, forecast floor enforcement, updated UI assumptions, and growth regression tests.
+- Updated Hiring Freeze preset to model inflation-only growth (~3% YoY vs 6% baseline) with growth-delta handling in V3 apply and regression tests; validation now clamps extreme projections more robustly.
 
 ## Milestone M0 — Setup & Access
 - Added SAC access checklist and updated OAuth/DES connectivity guidance.

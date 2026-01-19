@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
+from config import BASELINE_GROWTH_YOY, BASELINE_INFLATION_PPY, BASELINE_FTE_GROWTH_YOY
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,9 @@ class BaselineConfig:
     horizon_months: int = 120
     cagr_damping: float = 0.8
     clip_non_negative: bool = True
+    baseline_inflation_ppy: float = BASELINE_INFLATION_PPY
+    baseline_growth_ppy: float = BASELINE_GROWTH_YOY
+    baseline_fte_growth_ppy: float = BASELINE_FTE_GROWTH_YOY
 
 
 def _ensure_monthly(df: pd.DataFrame) -> pd.Series:
@@ -38,6 +42,16 @@ def _ensure_monthly(df: pd.DataFrame) -> pd.Series:
 def _forecast_index(last_date: pd.Timestamp, horizon_months: int) -> pd.DatetimeIndex:
     start = (last_date + pd.offsets.MonthBegin()).normalize()
     return pd.date_range(start=start, periods=horizon_months, freq="MS")
+
+
+def _min_growth_path(last_value: float, horizon_months: int, growth_ppy: float) -> np.ndarray:
+    monthly_rate = (1 + growth_ppy) ** (1 / 12.0) - 1
+    values = []
+    current = last_value
+    for _ in range(horizon_months):
+        current = current * (1 + monthly_rate)
+        values.append(current)
+    return np.array(values, dtype=float)
 
 
 def _fit_ets(series: pd.Series, horizon_months: int) -> pd.Series:
@@ -105,6 +119,10 @@ def run_baseline(
     forecast = pd.Series(forecast.values, index=forecast_index)
     if config.clip_non_negative:
         forecast = forecast.clip(lower=0.0)
+
+    # Enforce minimum upward drift based on baseline growth assumption (~FTE growth + inflation).
+    min_path = _min_growth_path(series.iloc[-1], horizon, config.baseline_growth_ppy)
+    forecast = pd.Series(np.maximum(forecast.values, min_path), index=forecast_index)
 
     output = pd.DataFrame(
         {
