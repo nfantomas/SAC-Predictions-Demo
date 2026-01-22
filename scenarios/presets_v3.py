@@ -50,17 +50,17 @@ def build_presets_v3() -> Dict[str, PresetV3]:
         ),
         "convert_it_contractors": PresetV3(
             key="convert_it_contractors",
-            description="Convert contractors to employees; small net savings and parallel slope.",
+            description="Convert contractors to employees; visible savings and parallel slope.",
             params=ScenarioParamsV3(
                 driver="cost",
-                lag_months=0,
-                onset_duration_months=6,
-                beta_multiplier=0.975,
-                impact_magnitude=-0.02,
+                lag_months=2,  # start a couple of months after t0 to align with baseline start
+                onset_duration_months=10,  # gradual conversion over ~1 year
+                beta_multiplier=0.90,
+                impact_magnitude=0.0,  # start at baseline, savings come from beta ramp
                 impact_mode="level",
             ),
-            story="Reduce variable cost a few percent for ~2% overall dip; returns to parallel growth.",
-            expected_year1_delta_range=(-0.025, -0.015),
+            story="Reduce variable cost ~10% via gradual conversion over ~1 year starting at t0+2; line starts at baseline then drifts below with a parallel slope.",
+            expected_year1_delta_range=(-0.09, -0.05),
             steady_state_note="Parallel slope below baseline.",
         ),
         "inflation_shock": PresetV3(

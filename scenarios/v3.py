@@ -34,6 +34,22 @@ def apply_beta_level_reset(beta_series: pd.Series, pct: float, start_idx: int) -
     return adjusted
 
 
+def apply_beta_level_ramp(beta_series: pd.Series, pct: float, start_idx: int, ramp_months: int) -> pd.Series:
+    """
+    Apply a level reset to beta with an optional linear ramp over ramp_months starting at start_idx.
+    """
+    if ramp_months <= 0:
+        return apply_beta_level_reset(beta_series, pct, start_idx)
+    adjusted = beta_series.copy()
+    end_idx = min(len(beta_series), start_idx + ramp_months)
+    for offset in range(start_idx, end_idx):
+        ramp_offset = offset - start_idx
+        factor = profile_factor("linear", ramp_offset, ramp_months)
+        adjusted[offset] = beta_series[offset] * (1.0 + pct * factor)
+    if end_idx < len(beta_series):
+        adjusted[end_idx:] = beta_series[end_idx:] * (1.0 + pct)
+    return adjusted
+
 def apply_beta_temporary_delta(beta_series: pd.Series, pct: float, start_idx: int, duration_months: int, ramp_months: int) -> pd.Series:
     adjusted = beta_series.copy()
     end_idx = min(len(beta_series), start_idx + duration_months) if duration_months else len(beta_series)
@@ -96,7 +112,12 @@ def apply_scenario_v3_simple(
     # Apply beta changes
     beta_eff = beta_series
     if params.beta_multiplier:
-        beta_eff = apply_beta_level_reset(beta_eff, pct=params.beta_multiplier - 1.0, start_idx=params.lag_months)
+        beta_eff = apply_beta_level_ramp(
+            beta_eff,
+            pct=params.beta_multiplier - 1.0,
+            start_idx=params.lag_months,
+            ramp_months=params.onset_duration_months,
+        )
     if params.cost_target_pct:
         # Convert cost target into an effective FTE delta on variable portion
         target_cost = baseline_cost["yhat"].iloc[0] * (1.0 + params.cost_target_pct)

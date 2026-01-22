@@ -586,6 +586,7 @@ def main() -> None:
     ).encode(x="date:T")
     st.altair_chart(base_chart + boundary, use_container_width=True)
 
+    st.divider()
     with st.expander("Legacy V2 forecasts"):
         st.subheader("Scenario Presets (V2 - legacy)")
         preset_names = list(PRESETS_V2.keys())
