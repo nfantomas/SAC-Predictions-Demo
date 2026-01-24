@@ -16,6 +16,7 @@ def set_pending_v3(
     safety: Dict[str, object] | None = None,
     raw_suggestion: Dict[str, object] | None = None,
     label: Optional[str] = None,
+    derived: Dict[str, object] | None = None,
 ) -> None:
     st.session_state["pending_v3"] = {
         "params": params,
@@ -26,6 +27,7 @@ def set_pending_v3(
         "safety": safety or {},
         "raw_suggestion": raw_suggestion or {},
         "label": label or "AI Assistant (V3)",
+        "derived": derived or {},
     }
 
 

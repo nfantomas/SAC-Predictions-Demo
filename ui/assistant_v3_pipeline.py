@@ -91,3 +91,38 @@ def validate_and_prepare_params(params: Dict[str, object]) -> Tuple[ScenarioPara
         return validate_and_sanitize(params, ctx=ValidateContext())
     except SuggestionValidationError:
         raise
+
+
+def resolve_driver_and_params(
+    suggestion: Dict[str, object],
+    ctx: DriverContext,
+    override_driver: str | None = None,
+    horizon_months: int = 120,
+) -> Tuple[str, ScenarioParamsV3, list[str], Dict[str, float]]:
+    """
+    Decide driver, validate params, and compute derived metrics.
+    """
+    override = (override_driver or "").strip().lower()
+    driver_inferred = (suggestion.get("driver") or suggestion.get("suggested_driver") or "").lower()
+    if driver_inferred not in ("cost", "fte", "cost_target"):
+        raise SuggestionValidationError("LLM response missing a valid driver (cost|fte|cost_target).")
+    driver_used = driver_inferred if override in ("", "auto") else override
+    if driver_used not in ("cost", "fte", "cost_target"):
+        raise SuggestionValidationError("Driver override must be one of cost|fte|cost_target.")
+
+    raw_params = suggestion.get("params", {})
+    params_v3, warnings = validate_and_sanitize(raw_params, ctx=ValidateContext(horizon_months=horizon_months))
+
+    baseline_fte = fte_from_cost(ctx.t0_cost_used, ctx.alpha, ctx.beta)
+    derived: Dict[str, float] = {"baseline_fte": baseline_fte, "alpha": ctx.alpha, "beta": ctx.beta}
+    if driver_used == "cost_target" and params_v3.cost_target_pct is not None:
+        target_cost = ctx.t0_cost_used * (1 + params_v3.cost_target_pct)
+        implied_fte = fte_from_cost(target_cost, ctx.alpha, ctx.beta)
+        derived["target_cost"] = target_cost
+        derived["implied_fte_delta"] = implied_fte - baseline_fte
+    if driver_used == "fte":
+        if params_v3.fte_delta_pct is not None:
+            derived["implied_fte_delta"] = baseline_fte * params_v3.fte_delta_pct
+        if params_v3.fte_delta_abs is not None:
+            derived["implied_fte_delta"] = params_v3.fte_delta_abs
+    return driver_used, params_v3, warnings, derived

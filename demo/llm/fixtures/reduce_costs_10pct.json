@@ -1,0 +1,39 @@
+{
+  "driver": "cost_target",
+  "suggested_driver": "cost_target",
+  "params": {
+    "driver": "cost_target",
+    "lag_months": 3,
+    "onset_duration_months": 6,
+    "event_duration_months": null,
+    "recovery_duration_months": null,
+    "shape": "linear",
+    "impact_mode": "level",
+    "impact_magnitude": -0.10,
+    "growth_delta_pp_per_year": 0.0,
+    "drift_pp_per_year": 0.0,
+    "event_growth_delta_pp_per_year": null,
+    "event_growth_exp_multiplier": null,
+    "post_event_growth_pp_per_year": null,
+    "fte_delta_abs": null,
+    "fte_delta_pct": null,
+    "beta_multiplier": null,
+    "cost_target_pct": -0.10
+  },
+  "rationale": {
+    "title": "Reduce workforce costs by 10%",
+    "summary": "Reach 10% lower run-rate over two quarters, maintain slope after",
+    "confidence": "medium",
+    "drivers": ["target phrasing → cost_target"],
+    "assumptions": ["alpha 20% fixed", "beta 10k/FTE"],
+    "why_these_numbers": ["lag=3 for near term", "linear onset 6 months"],
+    "sanity_checks": {"ten_year_multiplier_estimate": 0.9, "notes": "within bounds"}
+  },
+  "safety": {
+    "flags": [],
+    "clamped_fields": [],
+    "adjustments": [],
+    "warnings": [],
+    "notes": ""
+  }
+}

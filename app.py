@@ -28,7 +28,7 @@ from scenarios.schema import ScenarioParamsV3
 from scenarios.validate_v3 import validate_projection
 from scenarios.v3 import DriverContext, apply_scenario_v3_simple
 from ui.apply_suggestion import clear_pending_v3, get_pending_v3, set_pending_v3
-from ui.assistant_v3_pipeline import apply_driver_scenario, build_driver_context, parse_suggestion, validate_and_prepare_params
+from ui.assistant_v3_pipeline import apply_driver_scenario, build_driver_context, parse_suggestion, resolve_driver_and_params
 
 CACHE_SERIES_PRIMARY = Path("data/cache/sac_export_cost.csv")
 CACHE_SERIES_FALLBACK = Path("data/cache/sac_export.csv")
@@ -680,10 +680,6 @@ def _render_app() -> None:
     if st.button("Example: “Inflation spike mid next year”", key="example_prompt"):
         st.session_state["assistant_v3_text"] = "Inflation spike mid next year"
     assistant_v3_text = st.text_area("Describe a scenario (V3)", key="assistant_v3_text", placeholder="e.g., inflation shock that fades over a year")
-    suggested_driver = st.session_state.get("assistant_v3_suggested_driver", "cost") or "cost"
-    driver_options = ["cost", "fte", "cost_target"]
-    driver_index = driver_options.index(suggested_driver) if suggested_driver in driver_options else 0
-    driver_choice = st.selectbox("Scenario driver (UI wins; FTE is implied from cost)", driver_options, index=driver_index, key="assistant_v3_driver_widget")
 
     if st.button("Get suggestion (V3)"):
         stats = summarize_series(series_df)
@@ -709,25 +705,28 @@ def _render_app() -> None:
                     "usage": llm_result.get("usage"),
                     "raw_excerpt": llm_result.get("raw_excerpt"),
                 }
-                st.session_state["assistant_v3_suggested_driver"] = suggestion.get("suggested_driver") or driver_choice
                 try:
-                    params_v3, validation_warnings = validate_and_prepare_params(suggestion.get("params", {}))
+                    ctx = build_driver_context(observed_t0_cost=last_actual_value, assumptions=DEFAULT_ASSUMPTIONS)
+                    driver_used, params_v3, validation_warnings, derived = resolve_driver_and_params(
+                        suggestion, ctx, override_driver=None, horizon_months=len(forecast)
+                    )
                 except SuggestionValidationError as exc:
                     st.error(f"Validation failed: {_safe_error_text(exc)}")
                     clear_pending_v3()
                 else:
-                    ctx = build_driver_context(observed_t0_cost=last_actual_value, assumptions=DEFAULT_ASSUMPTIONS)
+                    st.session_state["assistant_v3_suggested_driver"] = driver_used
                     set_pending_v3(
                         params=params_v3,
-                        driver_choice=driver_choice,
+                        driver_choice=driver_used,
                         ctx=ctx,
                         rationale=suggestion.get("rationale", {}) or {},
                         warnings=validation_warnings,
                         safety=suggestion.get("safety"),
                         raw_suggestion=suggestion,
-                        label=f"AI Assistant (V3) [{driver_choice}]",
+                        label=f"AI Assistant (V3) [{driver_used}]",
+                        derived=derived,
                     )
-                    st.success("Suggestion ready. Review below and click Apply to overlay.")
+                    st.success(f"Suggestion ready with driver: {driver_used}. Review below and click Apply to overlay.")
 
     pending_v3 = get_pending_v3()
     if pending_v3:
@@ -818,15 +817,21 @@ def _render_app() -> None:
             else:
                 st.session_state["refresh_status"] = {"ok": False, "refresh_used_cache": False}
             st.rerun()
+        meta_raw_safe = {}
+        try:
+            meta_raw_safe = meta_raw
+        except NameError:
+            meta_raw_safe = {}
+
         with st.expander("SAC data details"):
-            provider_name = meta_raw.get("provider_name", "unknown")
-            metric_name = meta_raw.get("metric_name", "unknown")
-            unit = meta_raw.get("unit", "unknown")
-            output_mode = meta_raw.get("output_mode", "unknown")
-            measure_used = meta_raw.get("measure_used", "unknown")
-            aggregation = meta_raw.get("aggregation", "unknown")
-            last_refresh = meta_raw.get("last_refresh_time", meta.last_refresh_time)
-            filters_used = meta_raw.get("filters_used", {})
+            provider_name = meta_raw_safe.get("provider_name", "unknown")
+            metric_name = meta_raw_safe.get("metric_name", "unknown")
+            unit = meta_raw_safe.get("unit", "unknown")
+            output_mode = meta_raw_safe.get("output_mode", "unknown")
+            measure_used = meta_raw_safe.get("measure_used", "unknown")
+            aggregation = meta_raw_safe.get("aggregation", "unknown")
+            last_refresh = meta_raw_safe.get("last_refresh_time", meta.last_refresh_time)
+            filters_used = meta_raw_safe.get("filters_used", {})
             st.markdown(
                 f"""
                 <div class="meta-grid">

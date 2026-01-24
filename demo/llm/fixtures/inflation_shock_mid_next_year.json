@@ -1,0 +1,39 @@
+{
+  "driver": "cost",
+  "suggested_driver": "cost",
+  "params": {
+    "driver": "cost",
+    "lag_months": 6,
+    "onset_duration_months": 3,
+    "event_duration_months": null,
+    "recovery_duration_months": null,
+    "shape": "step",
+    "impact_mode": "level",
+    "impact_magnitude": 0.05,
+    "growth_delta_pp_per_year": 0.0,
+    "drift_pp_per_year": 0.03,
+    "event_growth_delta_pp_per_year": null,
+    "event_growth_exp_multiplier": null,
+    "post_event_growth_pp_per_year": null,
+    "fte_delta_abs": null,
+    "fte_delta_pct": null,
+    "beta_multiplier": 1.05,
+    "cost_target_pct": null
+  },
+  "rationale": {
+    "title": "Inflation spike mid next year",
+    "summary": "Add 5% wage shock starting mid next year with inflation drift",
+    "confidence": "medium",
+    "drivers": ["inflation terms → cost"],
+    "assumptions": ["alpha 20% fixed", "beta drifts 3%"],
+    "why_these_numbers": ["lag=6 for mid next year", "beta_multiplier 1.05 for wage pressure"],
+    "sanity_checks": {"ten_year_multiplier_estimate": 1.4, "notes": "within bounds"}
+  },
+  "safety": {
+    "flags": [],
+    "clamped_fields": [],
+    "adjustments": [],
+    "warnings": [],
+    "notes": ""
+  }
+}
