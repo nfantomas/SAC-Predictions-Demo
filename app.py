@@ -406,6 +406,15 @@ def _render_app() -> None:
     fte_quarterly_frames.append(fte_q)
 
     base_q_cost, base_q_fte = _quarterly_cost_and_fte(baseline_plot, "Plan / Baseline forecast", alpha_default, beta_default)
+    # Prepend last actual point to baseline for smoother visual connection
+    if not cost_q.empty:
+        last_actual_cost = cost_q.tail(1).copy()
+        last_actual_cost["series"] = "Plan / Baseline forecast"
+        base_q_cost = pd.concat([last_actual_cost, base_q_cost], ignore_index=True)
+    if not fte_q.empty:
+        last_actual_fte = fte_q.tail(1).copy()
+        last_actual_fte["series"] = "Plan / Baseline forecast"
+        base_q_fte = pd.concat([last_actual_fte, base_q_fte], ignore_index=True)
     cost_quarterly_frames.append(base_q_cost)
     fte_quarterly_frames.append(base_q_fte)
 
@@ -481,7 +490,7 @@ def _render_app() -> None:
             subset = fte_quarterly_df[fte_quarterly_df["series"] == series]
             fig.add_trace(
                 go.Scatter(
-                    x=subset["quarter_pos"],
+                    x=subset["quarter_center"],
                     y=subset["fte"],
                     mode="lines+markers+text",
                     name=f"{series} FTE",
@@ -491,6 +500,7 @@ def _render_app() -> None:
                     textposition="top center",
                     hovertemplate="<b>%{text}</b><br>%{y:,.0f} FTE",
                     showlegend=True,
+                    connectgaps=True,
                 ),
                 secondary_y=True,
             )
