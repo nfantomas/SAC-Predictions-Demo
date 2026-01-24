@@ -129,6 +129,29 @@ def apply_scenario_v3_simple(
         )
 
     costs = cost_from_fte(alpha, beta_eff.iloc[:horizon], fte_series.iloc[:horizon])
+    if params.impact_mode == "level" and params.impact_magnitude:
+        factors = [1.0] * horizon
+        start = min(max(params.lag_months, 0), horizon - 1)
+        onset = max(params.onset_duration_months or 0, 0)
+        event_dur = params.event_duration_months
+        recovery = params.recovery_duration_months
+        end_event = horizon if not event_dur else min(horizon, start + event_dur)
+        for i in range(start, horizon):
+            if onset > 0 and i < start + onset:
+                factor = 1.0 + params.impact_magnitude * profile_factor("linear", i - start, onset)
+            elif i < end_event:
+                factor = 1.0 + params.impact_magnitude
+            elif recovery:
+                rec_idx = i - end_event
+                if rec_idx < recovery:
+                    factor = 1.0 + params.impact_magnitude * (1 - profile_factor("linear", rec_idx, recovery))
+                else:
+                    factor = 1.0
+            else:
+                factor = 1.0 + params.impact_magnitude
+            factors[i] = max(0.0, factor)
+        costs = costs * factors
+
     out = pd.DataFrame({"date": baseline_cost["date"].iloc[:horizon].dt.date.astype(str), "yhat": costs.values})
     out["scenario"] = params.driver or "scenario"
     return out

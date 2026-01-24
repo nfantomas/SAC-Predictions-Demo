@@ -113,6 +113,11 @@ def resolve_driver_and_params(
     raw_params = suggestion.get("params", {})
     params_v3, warnings = validate_and_sanitize(raw_params, ctx=ValidateContext(horizon_months=horizon_months))
 
+    # If driver is FTE but only a level impact is provided (no explicit FTE deltas), convert impact to an FTE delta
+    if driver_used == "fte" and params_v3.impact_mode == "level" and params_v3.impact_magnitude and not params_v3.fte_delta_pct and not params_v3.fte_delta_abs:
+        params_v3 = params_v3.__class__(**{**params_v3.__dict__, "fte_delta_pct": params_v3.impact_magnitude, "impact_magnitude": 0.0})
+        warnings.append("Interpreted level impact as FTE delta for fte driver to avoid double-counting alpha.")
+
     baseline_fte = fte_from_cost(ctx.t0_cost_used, ctx.alpha, ctx.beta)
     derived: Dict[str, float] = {"baseline_fte": baseline_fte, "alpha": ctx.alpha, "beta": ctx.beta}
     if driver_used == "cost_target" and params_v3.cost_target_pct is not None:

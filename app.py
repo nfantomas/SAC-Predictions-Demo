@@ -336,37 +336,6 @@ def _render_app() -> None:
     fte_scen = _implied_fte(scen_t0, alpha_default, beta_default)
     fte_delta = fte_scen - fte_base
 
-    st.divider()
-    st.subheader("Key KPIs")
-
-    def _fmt_millions(value: float) -> str:
-        return f"{value/1_000_000:,.2f}M EUR"
-
-    def _delta_badge(text: str, positive: bool) -> str:
-        color = "#00b050" if positive else "#c0392b"
-        return f'<span style="background:{color};color:white;padding:4px 8px;border-radius:12px;font-size:0.8rem;">{text}</span>'
-
-    k1, k2, k3, k4, k5 = st.columns(5)
-    k1.markdown(f"**Current month cost**<br><span style='font-size:1.2rem'>{_fmt_millions(scen_t0)}</span><br>{_delta_badge(f'{scen_t0 - base_t0:,.0f} vs base', scen_t0>=base_t0)}", unsafe_allow_html=True)
-    k2.markdown(f"**Cost 12M**<br><span style='font-size:1.2rem'>{_fmt_millions(scen_y1)}</span><br>{_delta_badge(f'{_pct_delta(base_y1, scen_y1)*100:+.1f}%', scen_y1>=base_y1)}", unsafe_allow_html=True)
-    k3.markdown(f"**Cost 5Y**<br><span style='font-size:1.2rem'>{_fmt_millions(scen_y5)}</span><br>{_delta_badge(f'{_pct_delta(base_y5, scen_y5)*100:+.1f}%', scen_y5>=base_y5)}", unsafe_allow_html=True)
-    k4.markdown(f"**Cost 10Y**<br><span style='font-size:1.2rem'>{_fmt_millions(scen_y10)}</span><br>{_delta_badge(f'{_pct_delta(base_y10, scen_y10)*100:+.1f}%', scen_y10>=base_y10)}", unsafe_allow_html=True)
-    k5.markdown(f"**FTE (estimated)**<br><span style='font-size:1.2rem'>{fte_scen:,.0f}</span><br>{_delta_badge(f'{fte_delta:+.0f} vs base', fte_delta>=0)}", unsafe_allow_html=True)
-    st.caption(f"Scenario shown: {scenario_label_for_kpi}")
-
-    with st.expander("Model assumptions"):
-        st.markdown(
-            f"""
-            <div style="font-size:0.9rem;color:var(--ink);">
-              • Baseline cost growth: <strong>{BASELINE_GROWTH_YOY*100:.1f}%/yr</strong><br>
-              • Inflation on beta: <strong>{BASELINE_INFLATION_PPY*100:.1f}%/yr</strong><br>
-              • Fixed cost share: <strong>20% (alpha≈2.0M)</strong><br>
-              • t0 FTE: <strong>{DEFAULT_ASSUMPTIONS.t0_fte:,.0f}</strong> (implied {fte_base:,.0f})
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
     st.subheader("Forecast view")
     st.caption("EUR/month; FTE shown as end-of-quarter estimates.")
     chart_frames = []
@@ -397,9 +366,27 @@ def _render_app() -> None:
     color_scale = alt.Scale(domain=series_order, range=[series_colors[name] for name in series_order])
 
     y_title = metric_label if not title_unit else f"{metric_label} ({title_unit})"
-    base_chart = alt.Chart(chart_df).mark_line().encode(
+    # Layered chart to ensure baseline remains visible when overlay is applied
+    base_layers = alt.Chart(chart_df).transform_filter(
+        alt.FieldOneOfPredicate(field="series", oneOf=["Actual", "Plan / Baseline forecast"])
+    ).mark_line(strokeWidth=2).encode(
         x=alt.X("date:T", axis=alt.Axis(format="%Y-%m")),
         y=alt.Y("y:Q", title=y_title),
+        color=alt.Color("series:N", scale=color_scale, legend=alt.Legend(title="Series")),
+        tooltip=["series:N", "date:T", "y:Q"],
+        strokeDash=alt.condition(
+            alt.FieldEqualPredicate(field="series", equal="Plan / Baseline forecast"),
+            alt.value([4, 4]),
+            alt.value([0, 0]),
+        ),
+    )
+    overlay_layer = alt.Chart(chart_df).transform_filter(
+        alt.FieldOneOfPredicate(field="series", oneOf=list(series_colors.keys()))
+    ).transform_filter(alt.FieldEqualPredicate(field="series", equal=scenario_series_label) if v3_overlay is not None else alt.datum.series == "none").mark_line(
+        strokeWidth=3, opacity=0.85
+    ).encode(
+        x="date:T",
+        y="y:Q",
         color=alt.Color("series:N", scale=color_scale, legend=alt.Legend(title="Series")),
         tooltip=["series:N", "date:T", "y:Q"],
     )
@@ -407,7 +394,7 @@ def _render_app() -> None:
         color="#5a4d44",
         strokeDash=[4, 4],
     ).encode(x="date:T")
-    st.altair_chart(base_chart + boundary, use_container_width=True)
+    st.altair_chart(base_layers + overlay_layer + boundary, use_container_width=True)
 
     st.caption("Quarterly EUR totals with end-of-quarter FTE; initial view focuses on your selected years.")
     # Quarterly view: cost totals (bars) and end-of-quarter FTE (line)
@@ -630,7 +617,51 @@ def _render_app() -> None:
         st.altair_chart(detail_layer & overview, use_container_width=True)
 
     st.divider()
-    st.subheader("What-if Scenarios")
+    st.subheader("Key KPIs")
+
+    def _fmt_millions(value: float) -> str:
+        return f"{value/1_000_000:,.2f}M EUR"
+
+    def _delta_badge(text: str, positive: bool) -> str:
+        color = "#00b050" if positive else "#c0392b"
+        return f'<span style="background:{color};color:white;padding:4px 8px;border-radius:12px;font-size:0.8rem;">{text}</span>'
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.markdown(f"**Current month cost**<br><span style='font-size:1.2rem'>{_fmt_millions(scen_t0)}</span><br>{_delta_badge(f'{scen_t0 - base_t0:,.0f} vs base', scen_t0>=base_t0)}", unsafe_allow_html=True)
+    k2.markdown(f"**Cost 12M**<br><span style='font-size:1.2rem'>{_fmt_millions(scen_y1)}</span><br>{_delta_badge(f'{_pct_delta(base_y1, scen_y1)*100:+.1f}%', scen_y1>=base_y1)}", unsafe_allow_html=True)
+    k3.markdown(f"**Cost 5Y**<br><span style='font-size:1.2rem'>{_fmt_millions(scen_y5)}</span><br>{_delta_badge(f'{_pct_delta(base_y5, scen_y5)*100:+.1f}%', scen_y5>=base_y5)}", unsafe_allow_html=True)
+    k4.markdown(f"**Cost 10Y**<br><span style='font-size:1.2rem'>{_fmt_millions(scen_y10)}</span><br>{_delta_badge(f'{_pct_delta(base_y10, scen_y10)*100:+.1f}%', scen_y10>=base_y10)}", unsafe_allow_html=True)
+
+    # FTE KPIs aligned under costs
+    fte_scen_y1 = _implied_fte(scen_y1, alpha_default, beta_default)
+    fte_scen_y5 = _implied_fte(scen_y5, alpha_default, beta_default)
+    fte_scen_y10 = _implied_fte(scen_y10, alpha_default, beta_default)
+    fte_base_y1 = _implied_fte(base_y1, alpha_default, beta_default)
+    fte_base_y5 = _implied_fte(base_y5, alpha_default, beta_default)
+    fte_base_y10 = _implied_fte(base_y10, alpha_default, beta_default)
+
+    f1, f2, f3, f4 = st.columns(4)
+    f1.markdown(f"**Current FTE**<br><span style='font-size:1.2rem'>{fte_scen:,.0f}</span><br>{_delta_badge(f'{fte_delta:+.0f} vs base', fte_delta>=0)}", unsafe_allow_html=True)
+    f2.markdown(f"**FTE 12M**<br><span style='font-size:1.2rem'>{fte_scen_y1:,.0f}</span><br>{_delta_badge(f'{fte_scen_y1 - fte_base_y1:+.0f} vs base', fte_scen_y1>=fte_base_y1)}", unsafe_allow_html=True)
+    f3.markdown(f"**FTE 5Y**<br><span style='font-size:1.2rem'>{fte_scen_y5:,.0f}</span><br>{_delta_badge(f'{fte_scen_y5 - fte_base_y5:+.0f} vs base', fte_scen_y5>=fte_base_y5)}", unsafe_allow_html=True)
+    f4.markdown(f"**FTE 10Y**<br><span style='font-size:1.2rem'>{fte_scen_y10:,.0f}</span><br>{_delta_badge(f'{fte_scen_y10 - fte_base_y10:+.0f} vs base', fte_scen_y10>=fte_base_y10)}", unsafe_allow_html=True)
+    st.caption(f"Scenario shown: {scenario_label_for_kpi}")
+
+    with st.expander("Model assumptions"):
+        st.markdown(
+            f"""
+            <div style="font-size:0.9rem;color:var(--ink);">
+              • Baseline cost growth: <strong>{BASELINE_GROWTH_YOY*100:.1f}%/yr</strong><br>
+              • Inflation on beta: <strong>{BASELINE_INFLATION_PPY*100:.1f}%/yr</strong><br>
+              • Fixed cost share: <strong>20% (alpha≈2.0M)</strong><br>
+              • t0 FTE: <strong>{DEFAULT_ASSUMPTIONS.t0_fte:,.0f}</strong> (implied {fte_base:,.0f})
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.divider()
+    st.subheader("Pre-set What-if Scenarios")
     preset_keys = list(PRESETS_V3.keys())
     if not preset_keys:
         st.info("No presets available.")
@@ -659,20 +690,7 @@ def _render_app() -> None:
                 st.rerun()
         if selected_key in PRESETS_V3:
             st.caption(PRESETS_V3[selected_key].story or PRESETS_V3[selected_key].description)
-        if scenario_for_kpi is not None:
-            delta_12m = _pct_delta(base_y1, scen_y1) * 100
-            delta_5y = _pct_delta(base_y5, scen_y5) * 100
-            with st.container():
-                st.markdown(
-                    f"""
-                    <div class="card" style="margin-top:0.5rem;">
-                      <strong>Scenario summary</strong><br>
-                      • 12M impact: {delta_12m:+.1f}% vs plan<br>
-                      • 5Y impact: {delta_5y:+.1f}% vs plan
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+        # Scenario summary card removed per request
 
     st.divider()
     st.subheader("AI scenario assistant")
@@ -681,7 +699,7 @@ def _render_app() -> None:
         st.session_state["assistant_v3_text"] = "Inflation spike mid next year"
     assistant_v3_text = st.text_area("Describe a scenario (V3)", key="assistant_v3_text", placeholder="e.g., inflation shock that fades over a year")
 
-    if st.button("Get suggestion (V3)"):
+    if st.button("Get suggestion"):
         stats = summarize_series(series_df)
         try:
             llm_result = request_suggestion(assistant_v3_text, horizon_years=len(forecast_years), baseline_stats=stats)
@@ -735,49 +753,48 @@ def _render_app() -> None:
         safety = pending_v3.get("safety", {}) or {}
         warnings = pending_v3.get("warnings", [])
 
-        st.caption(f"Suggested driver: {pending_v3['raw_suggestion'].get('suggested_driver') or 'cost'} | You chose: {pending_v3['driver_choice']} (UI wins)")
-        if ctx.warning:
-            st.warning(ctx.warning)
-        if warnings:
-            st.warning("Adjusted to safe bounds: " + " | ".join(warnings))
-        safety_warnings = safety.get("warnings") or []
-        if safety_warnings:
-            st.warning("LLM safety: " + " | ".join(safety_warnings))
-        safety_adjustments = safety.get("adjustments") or []
-        if safety_adjustments:
-            st.info("Adjustments: " + " | ".join(safety_adjustments))
+        with st.expander("AI suggested scenario parameters", expanded=False):
+            if ctx.warning:
+                st.warning(ctx.warning)
+            if warnings:
+                st.warning("Adjusted to safe bounds: " + " | ".join(warnings))
+            safety_warnings = safety.get("warnings") or []
+            if safety_warnings:
+                st.warning("LLM safety: " + " | ".join(safety_warnings))
+            safety_adjustments = safety.get("adjustments") or []
+            if safety_adjustments:
+                st.info("Adjustments: " + " | ".join(safety_adjustments))
 
-        alpha_col, beta_col, fshare_col = st.columns(3)
-        alpha_col.metric("t0 cost used", f"{ctx.t0_cost_used:,.0f} EUR")
-        beta_col.metric("Beta (per FTE)", f"{ctx.beta:,.0f}")
-        fshare_col.metric("Alpha (fixed)", f"{ctx.alpha:,.0f}")
-        st.caption("Implied FTE (derived) = max(0, (cost - alpha) / beta)")
-
-        with st.expander("Scenario parameters and rationale", expanded=False):
-            st.markdown("**Parameters**")
+            alpha_col, beta_col, fshare_col = st.columns(3)
+            alpha_col.metric("t0 cost used", f"{ctx.t0_cost_used:,.0f} EUR")
+            beta_col.metric("Beta (per FTE)", f"{ctx.beta:,.0f}")
+            fshare_col.metric("Alpha (fixed)", f"{ctx.alpha:,.0f}")
+            st.caption("Implied FTE (derived) = max(0, (cost - alpha) / beta)")
+            st.caption(
+                f"Driver chosen: {pending_v3['driver_choice']} (inferred: {pending_v3.get('raw_suggestion', {}).get('driver') or pending_v3.get('raw_suggestion', {}).get('suggested_driver')})"
+            )
             st.table(_scenario_params_table(pending_v3["params"]))
 
-            title = rationale.get("title") or "Scenario rationale"
-            st.markdown(f"**{title}**")
-            st.write(rationale.get("summary", ""))
-            why = rationale.get("why_these_numbers", [])
-            assumptions = rationale.get("assumptions", [])
-            sanity = rationale.get("sanity_checks", {})
-            if why:
-                st.markdown("Why these numbers")
-                for item in why:
-                    st.markdown(f"- {item}")
-            if assumptions:
-                st.markdown("Assumptions")
-                for item in assumptions:
-                    st.markdown(f"- {item}")
-            if sanity:
-                st.caption(
-                    f"Sanity check: ~{sanity.get('ten_year_multiplier_estimate', '')}x over 10y; {sanity.get('notes', '')}"
-                )
-
+        title = rationale.get("title") or "Scenario rationale"
+        st.markdown(f"**{title}**")
+        st.write(rationale.get("summary", ""))
+        why = rationale.get("why_these_numbers", [])
+        assumptions = rationale.get("assumptions", [])
+        sanity = rationale.get("sanity_checks", {})
+        if why:
+            st.markdown("Why these numbers")
+            for item in why:
+                st.markdown(f"- {item}")
+        if assumptions:
+            st.markdown("Assumptions")
+            for item in assumptions:
+                st.markdown(f"- {item}")
+        if sanity:
+            st.caption(
+                f"Sanity check: ~{sanity.get('ten_year_multiplier_estimate', '')}x over 10y; {sanity.get('notes', '')}"
+            )
         with st.form("apply_suggestion_v3_form"):
-            apply_clicked = st.form_submit_button("Apply suggestion (V3)", use_container_width=True)
+            apply_clicked = st.form_submit_button("Apply suggestion", use_container_width=True)
         if apply_clicked:
             scenario_df = apply_driver_scenario(
                 forecast_cost_df=forecast[["date", "yhat"]],
@@ -788,7 +805,6 @@ def _render_app() -> None:
             )
             st.session_state["assistant_v3_overlay"] = scenario_df
             st.session_state["assistant_v3_label"] = pending_v3.get("label", f"AI Assistant (V3) [{pending_v3['driver_choice']}]")
-            clear_pending_v3()
             st.success("Applied V3 suggestion. Overlay updated.")
             st.rerun()
 
