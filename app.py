@@ -260,15 +260,31 @@ def _render_app() -> None:
     title_suffix = f"{grain_label}" + (f", {title_unit}" if title_unit else "")
 
     st.markdown(
-        f'<div class="app-title">{metric_label} ({title_suffix})</div>',
+        f'<div class="app-title">HR Cost & Workforce Forecast</div>',
         unsafe_allow_html=True,
     )
-    st.caption("Actuals from SAP Analytics Cloud • Forecast + scenarios • Adjustable assumptions")
-
+    st.caption(
+        f"Data from SAP Analytics Cloud (SAC). Last refresh: {meta.last_refresh_time}. Scenarios modify baseline assumptions."
+    )
     series_df = pd.DataFrame(rows)
     series_df["date"] = pd.to_datetime(series_df["date"])
     series_df["value"] = pd.to_numeric(series_df["value"], errors="coerce")
     series_df = series_df.sort_values("date")
+
+    with st.expander("Data provenance", expanded=False):
+        provider_name = meta_raw.get("provider_name", "unknown")
+        dataset_name = meta_raw.get("metric_name", "unknown")
+        filters_used = meta_raw.get("filters_used", {})
+        st.markdown(
+            f"""
+            • Provider: **{provider_name or 'unknown'}** (masked)<br>
+            • Dataset: **{dataset_name}**<br>
+            • Rows: **{len(series_df):,}** | Date range: **{series_df['date'].min().date()} → {series_df['date'].max().date()}**<br>
+            • Filters: **{filters_used}**<br>
+            • Status: <span style="color:#00b050">● Connected</span>
+            """,
+            unsafe_allow_html=True,
+        )
 
     last_actual_value = float(series_df["value"].iloc[-1])
     last_actual_date = series_df["date"].iloc[-1]
@@ -290,7 +306,7 @@ def _render_app() -> None:
     )
     base_for_kpi = forecast.sort_values("date").reset_index(drop=True)
     scenario_for_kpi = None
-    scenario_label_for_kpi = "Baseline forecast"
+    scenario_label_for_kpi = "Plan / Baseline forecast"
 
     v3_overlay = st.session_state.get("assistant_v3_overlay")
     if v3_overlay is not None:
@@ -322,67 +338,61 @@ def _render_app() -> None:
 
     st.divider()
     st.subheader("Key KPIs")
-    value_suffix = f" {unit_label}".rstrip()
+
+    def _fmt_millions(value: float) -> str:
+        return f"{value/1_000_000:,.2f}M EUR"
+
+    def _delta_badge(text: str, positive: bool) -> str:
+        color = "#00b050" if positive else "#c0392b"
+        return f'<span style="background:{color};color:white;padding:4px 8px;border-radius:12px;font-size:0.8rem;">{text}</span>'
+
     k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric(
-        "t0 cost",
-        f"{scen_t0:,.0f}{value_suffix}",
-        delta=f"{scen_t0 - base_t0:,.0f} vs base",
-    )
-    k2.metric(
-        "Year‑1",
-        f"{scen_y1:,.0f}{value_suffix}",
-        delta=f"{_pct_delta(base_y1, scen_y1)*100:+.1f}%",
-    )
-    k3.metric(
-        "Year‑5",
-        f"{scen_y5:,.0f}{value_suffix}",
-        delta=f"{_pct_delta(base_y5, scen_y5)*100:+.1f}%",
-    )
-    k4.metric(
-        "Year‑10",
-        f"{scen_y10:,.0f}{value_suffix}",
-        delta=f"{_pct_delta(base_y10, scen_y10)*100:+.1f}%",
-    )
-    k5.metric(
-        "Implied FTE",
-        f"{fte_scen:,.0f}",
-        delta=f"{fte_delta:+.0f} vs base",
-    )
+    k1.markdown(f"**Current month cost**<br><span style='font-size:1.2rem'>{_fmt_millions(scen_t0)}</span><br>{_delta_badge(f'{scen_t0 - base_t0:,.0f} vs base', scen_t0>=base_t0)}", unsafe_allow_html=True)
+    k2.markdown(f"**Cost 12M**<br><span style='font-size:1.2rem'>{_fmt_millions(scen_y1)}</span><br>{_delta_badge(f'{_pct_delta(base_y1, scen_y1)*100:+.1f}%', scen_y1>=base_y1)}", unsafe_allow_html=True)
+    k3.markdown(f"**Cost 5Y**<br><span style='font-size:1.2rem'>{_fmt_millions(scen_y5)}</span><br>{_delta_badge(f'{_pct_delta(base_y5, scen_y5)*100:+.1f}%', scen_y5>=base_y5)}", unsafe_allow_html=True)
+    k4.markdown(f"**Cost 10Y**<br><span style='font-size:1.2rem'>{_fmt_millions(scen_y10)}</span><br>{_delta_badge(f'{_pct_delta(base_y10, scen_y10)*100:+.1f}%', scen_y10>=base_y10)}", unsafe_allow_html=True)
+    k5.markdown(f"**FTE (estimated)**<br><span style='font-size:1.2rem'>{fte_scen:,.0f}</span><br>{_delta_badge(f'{fte_delta:+.0f} vs base', fte_delta>=0)}", unsafe_allow_html=True)
     st.caption(f"Scenario shown: {scenario_label_for_kpi}")
 
-    with st.container():
-        st.caption("Assumptions (fixed for demo)")
-        a1, a2, a3, a4 = st.columns(4)
-        a1.metric("Baseline growth", f"{BASELINE_GROWTH_YOY*100:.1f}%/yr")
-        a2.metric("Inflation (beta drift)", f"{BASELINE_INFLATION_PPY*100:.1f}%/yr")
-        a3.metric("Fixed cost share", "20% (alpha≈2.0M)")
-        a4.metric("t0 FTE", f"{DEFAULT_ASSUMPTIONS.t0_fte:,.0f} (implied {fte_base:,.0f})")
+    with st.expander("Model assumptions"):
+        st.markdown(
+            f"""
+            <div style="font-size:0.9rem;color:var(--ink);">
+              • Baseline cost growth: <strong>{BASELINE_GROWTH_YOY*100:.1f}%/yr</strong><br>
+              • Inflation on beta: <strong>{BASELINE_INFLATION_PPY*100:.1f}%/yr</strong><br>
+              • Fixed cost share: <strong>20% (alpha≈2.0M)</strong><br>
+              • t0 FTE: <strong>{DEFAULT_ASSUMPTIONS.t0_fte:,.0f}</strong> (implied {fte_base:,.0f})
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     st.subheader("Forecast view")
+    st.caption("EUR/month; FTE shown as end-of-quarter estimates.")
     chart_frames = []
     actual_plot = series_df[["date", "value"]].rename(columns={"value": "y"})
-    actual_plot["series"] = "Actuals"
+    actual_plot["series"] = "Actual"
     chart_frames.append(actual_plot)
 
     baseline_plot = forecast[["date", "yhat"]].rename(columns={"yhat": "y"})
-    baseline_plot["series"] = "Baseline forecast"
+    baseline_plot["series"] = "Plan / Baseline forecast"
     chart_frames.append(baseline_plot)
 
+    scenario_series_label = st.session_state.get("assistant_v3_label", "Scenario")
     if v3_overlay is not None:
         v3_plot = v3_overlay.copy()
         v3_plot["date"] = pd.to_datetime(v3_plot["date"])
         v3_plot = v3_plot.rename(columns={"yhat": "y"})
-        v3_plot["series"] = st.session_state.get("assistant_v3_label", "Preset/Assistant (V3)")
+        v3_plot["series"] = scenario_series_label
         chart_frames.append(v3_plot)
 
     chart_df = pd.concat(chart_frames, ignore_index=True)
     series_colors = {
-        "Actuals": "#009fe3",  # primary
-        "Baseline forecast": "#00b050",  # prediction green
+        "Actual": "#009fe3",  # primary
+        "Plan / Baseline forecast": "#00b050",  # prediction green
     }
     if v3_overlay is not None:
-        series_colors[st.session_state.get("assistant_v3_label", "AI Assistant (V3)")] = "#66c47d"  # compare-to-baseline green
+        series_colors[scenario_series_label] = "#e67e22"  # scenario accent
     series_order = list(series_colors.keys())
     color_scale = alt.Scale(domain=series_order, range=[series_colors[name] for name in series_order])
 
@@ -399,15 +409,16 @@ def _render_app() -> None:
     ).encode(x="date:T")
     st.altair_chart(base_chart + boundary, use_container_width=True)
 
+    st.caption("Quarterly EUR totals with end-of-quarter FTE; initial view focuses on your selected years.")
     # Quarterly view: cost totals (bars) and end-of-quarter FTE (line)
     cost_quarterly_frames: list[pd.DataFrame] = []
     fte_quarterly_frames: list[pd.DataFrame] = []
     actual_cost_df = actual_plot.rename(columns={"y": "y"})
-    cost_q, fte_q = _quarterly_cost_and_fte(actual_cost_df, "Actuals", alpha_default, beta_default)
+    cost_q, fte_q = _quarterly_cost_and_fte(actual_cost_df, "Actual", alpha_default, beta_default)
     cost_quarterly_frames.append(cost_q)
     fte_quarterly_frames.append(fte_q)
 
-    base_q_cost, base_q_fte = _quarterly_cost_and_fte(baseline_plot, "Baseline forecast", alpha_default, beta_default)
+    base_q_cost, base_q_fte = _quarterly_cost_and_fte(baseline_plot, "Plan / Baseline forecast", alpha_default, beta_default)
     cost_quarterly_frames.append(base_q_cost)
     fte_quarterly_frames.append(base_q_fte)
 
@@ -415,7 +426,7 @@ def _render_app() -> None:
         overlay_df = v3_overlay.copy()
         overlay_df["date"] = pd.to_datetime(overlay_df["date"])
         overlay_df = overlay_df.rename(columns={"yhat": "y"})
-        overlay_label = st.session_state.get("assistant_v3_label", "Preset/Assistant (V3)")
+        overlay_label = st.session_state.get("assistant_v3_label", "Scenario")
         overlay_cost_q, overlay_fte_q = _quarterly_cost_and_fte(overlay_df, overlay_label, alpha_default, beta_default)
         cost_quarterly_frames.append(overlay_cost_q)
         fte_quarterly_frames.append(overlay_fte_q)
@@ -443,10 +454,10 @@ def _render_app() -> None:
         axis=alt.Axis(format="%Y-Q%q"),
     )
     series_list = cost_quarterly_df["series"].unique().tolist()
-    overlay_label = st.session_state.get("assistant_v3_label", "Preset/Assistant (V3)")
+    overlay_label = st.session_state.get("assistant_v3_label", "Scenario")
     color_map = {
-        "Actuals": "#009fe3",
-        "Baseline forecast": "#00b050",  # prediction green
+        "Actual": "#009fe3",
+        "Plan / Baseline forecast": "#00b050",  # prediction green
         overlay_label: "#66c47d",  # comparison green
     }
     # Offset FTE markers slightly per series so each sits above its own bar
@@ -496,33 +507,54 @@ def _render_app() -> None:
                 ),
                 secondary_y=True,
             )
-        x_range = [pd.Timestamp("2027-01-01"), pd.Timestamp("2029-12-31")]  # initial viewport
-        st.session_state["quarterly_x_range"] = x_range
+        x_range = [
+            pd.Timestamp("2027-01-01"),
+            pd.Timestamp("2029-12-31"),
+        ]
+        tick_df = (
+            cost_quarterly_df[["quarter_center", "quarter_label"]]
+            .drop_duplicates()
+            .sort_values("quarter_center")
+        )
         fig.update_xaxes(
             title_text="",
             tickformat="%Y Q%q",
             range=x_range,
             autorange=False,
             tickmode="array",
-            tickvals=cost_quarterly_df.groupby("quarter_label")["quarter_center"].first().tolist(),
-            ticktext=cost_quarterly_df["quarter_label"].unique().tolist(),
+            tickvals=tick_df["quarter_center"].tolist(),
+            ticktext=tick_df["quarter_label"].tolist(),
+            showgrid=True,
+            gridcolor="#e6e6e6",
         )
         fig.update_layout(
             title="FTE & Cost per Quarter",
             barmode="group",
             bargap=0.2,
             height=430,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="right", x=1.0),
             xaxis=dict(
                 rangeselector=dict(buttons=[]),
                 rangeslider=dict(visible=True),
             ),
+            plot_bgcolor="#ffffff",
+            paper_bgcolor="#ffffff",
+            margin=dict(t=40, l=10, r=10, b=50),
         )
-        # Re-apply range after layout to prevent any autorange overrides
-        fig.update_xaxes(range=x_range, autorange=False)
-        fig.layout.xaxis.update(range=x_range, autorange=False)
-        fig.update_yaxes(title_text="Quarterly cost", secondary_y=False, range=[0, 100_000_000])
-        fig.update_yaxes(title_text="FTE (end of quarter)", secondary_y=True)
+        fig.update_yaxes(
+            title_text="Quarterly cost",
+            secondary_y=False,
+            range=[0, 100_000_000],
+            tickformat=",.0f",
+            showgrid=True,
+            gridcolor="#e6e6e6",
+        )
+        fig.update_yaxes(
+            title_text="FTE (end of quarter)",
+            secondary_y=True,
+            tickformat=",.0f",
+            showgrid=False,
+        )
         st.plotly_chart(fig, use_container_width=True)
     elif not HAS_PLOTLY:
         st.warning("Plotly is not installed; showing limited Altair fallback. Install plotly>=5.22.0 for interactive zoom/pan.")
@@ -598,17 +630,17 @@ def _render_app() -> None:
         st.altair_chart(detail_layer & overview, use_container_width=True)
 
     st.divider()
-    st.subheader("Scenarios (V3 presets)")
+    st.subheader("What-if Scenarios")
     preset_keys = list(PRESETS_V3.keys())
     if not preset_keys:
         st.info("No presets available.")
     else:
         selected_key = st.session_state.get("selected_preset_v3", preset_keys[0])
-        cols = st.columns(min(3, len(preset_keys)))
+        cols = st.columns(len(preset_keys))
         for idx, key in enumerate(preset_keys):
             preset = PRESETS_V3[key]
             label = preset.key.replace("_", " ").title()
-            btn = cols[idx % len(cols)].button(label, key=f"preset_btn_{key}")
+            btn = cols[idx % len(cols)].button(label, key=f"preset_btn_{key}", use_container_width=True)
             cols[idx % len(cols)].caption(preset.description)
             if btn:
                 selected_key = key
@@ -621,16 +653,32 @@ def _render_app() -> None:
                     horizon_months=len(forecast),
                 )
                 st.session_state["assistant_v3_overlay"] = scenario_df
-                st.session_state["assistant_v3_label"] = f"Preset V3: {preset.key.replace('_', ' ').title()}"
+                st.session_state["assistant_v3_label"] = f"Scenario preset: {preset.key.replace('_', ' ').title()}"
                 st.session_state["assistant_v3_suggested_driver"] = preset.params.driver or "cost"
                 st.success(f"Applied {label}. Overlay updated.")
                 st.rerun()
         if selected_key in PRESETS_V3:
             st.caption(PRESETS_V3[selected_key].story or PRESETS_V3[selected_key].description)
+        if scenario_for_kpi is not None:
+            delta_12m = _pct_delta(base_y1, scen_y1) * 100
+            delta_5y = _pct_delta(base_y5, scen_y5) * 100
+            with st.container():
+                st.markdown(
+                    f"""
+                    <div class="card" style="margin-top:0.5rem;">
+                      <strong>Scenario summary</strong><br>
+                      • 12M impact: {delta_12m:+.1f}% vs plan<br>
+                      • 5Y impact: {delta_5y:+.1f}% vs plan
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
     st.divider()
-    st.subheader("AI Scenario Assistant (V3)")
+    st.subheader("AI scenario assistant")
     st.caption("Uses new HR presets and driver model.")
+    if st.button("Example: “Inflation spike mid next year”", key="example_prompt"):
+        st.session_state["assistant_v3_text"] = "Inflation spike mid next year"
     assistant_v3_text = st.text_area("Describe a scenario (V3)", key="assistant_v3_text", placeholder="e.g., inflation shock that fades over a year")
     suggested_driver = st.session_state.get("assistant_v3_suggested_driver", "cost") or "cost"
     driver_options = ["cost", "fte", "cost_target"]
@@ -706,28 +754,28 @@ def _render_app() -> None:
         fshare_col.metric("Alpha (fixed)", f"{ctx.alpha:,.0f}")
         st.caption("Implied FTE (derived) = max(0, (cost - alpha) / beta)")
 
-        st.markdown("**Parameters**")
-        st.table(_scenario_params_table(pending_v3["params"]))
+        with st.expander("Scenario parameters and rationale", expanded=False):
+            st.markdown("**Parameters**")
+            st.table(_scenario_params_table(pending_v3["params"]))
 
-        st.markdown("**Rationale**")
-        title = rationale.get("title") or "Scenario rationale"
-        st.markdown(f"**{title}**")
-        st.write(rationale.get("summary", ""))
-        why = rationale.get("why_these_numbers", [])
-        assumptions = rationale.get("assumptions", [])
-        sanity = rationale.get("sanity_checks", {})
-        if why:
-            st.markdown("Why these numbers")
-            for item in why:
-                st.markdown(f"- {item}")
-        if assumptions:
-            st.markdown("Assumptions")
-            for item in assumptions:
-                st.markdown(f"- {item}")
-        if sanity:
-            st.caption(
-                f"Sanity check: ~{sanity.get('ten_year_multiplier_estimate', '')}x over 10y; {sanity.get('notes', '')}"
-            )
+            title = rationale.get("title") or "Scenario rationale"
+            st.markdown(f"**{title}**")
+            st.write(rationale.get("summary", ""))
+            why = rationale.get("why_these_numbers", [])
+            assumptions = rationale.get("assumptions", [])
+            sanity = rationale.get("sanity_checks", {})
+            if why:
+                st.markdown("Why these numbers")
+                for item in why:
+                    st.markdown(f"- {item}")
+            if assumptions:
+                st.markdown("Assumptions")
+                for item in assumptions:
+                    st.markdown(f"- {item}")
+            if sanity:
+                st.caption(
+                    f"Sanity check: ~{sanity.get('ten_year_multiplier_estimate', '')}x over 10y; {sanity.get('notes', '')}"
+                )
 
         with st.form("apply_suggestion_v3_form"):
             apply_clicked = st.form_submit_button("Apply suggestion (V3)", use_container_width=True)
@@ -757,7 +805,8 @@ def _render_app() -> None:
             else:
                 st.error("Refresh failed and cache missing. Run demo.refresh first.")
 
-        if st.button("Refresh from SAC", use_container_width=True):
+        st.caption("Maintenance: refresh SAC cache (not needed for normal demo use).")
+        if st.button("Maintenance: Refresh SAC cache", use_container_width=True):
             with st.spinner("Running refresh → forecast → scenarios..."):
                 result = run_all(cache_path=str(series_path))
             if result["ok"]:
