@@ -4,6 +4,13 @@ import json
 from pathlib import Path
 
 import altair as alt
+
+try:
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    HAS_PLOTLY = True
+except ImportError:  # pragma: no cover - optional dependency
+    HAS_PLOTLY = False
 import pandas as pd
 import streamlit as st
 
@@ -123,21 +130,53 @@ def _scenario_params_table(params: ScenarioParamsV3) -> pd.DataFrame:
     return df
 
 
+def _quarterly_cost_and_fte(df: pd.DataFrame, label: str, alpha: float, beta: float) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Aggregate a monthly cost series into quarterly totals and end-of-quarter FTE (implied).
+    Cost = sum within quarter; FTE = last month of quarter.
+    """
+    if df.empty:
+        return pd.DataFrame(columns=["quarter", "cost", "series"]), pd.DataFrame(columns=["quarter", "fte", "series"])
+    tmp = df.copy()
+    tmp["date"] = pd.to_datetime(tmp["date"])
+    tmp = tmp.sort_values("date")
+    period = tmp["date"].dt.to_period("Q")
+    tmp["quarter"] = period.dt.start_time
+    tmp["quarter_label"] = period.apply(lambda p: f"Q{p.quarter} {p.year}")
+    tmp["quarter_order"] = period.apply(lambda p: p.year * 4 + p.quarter)
+    tmp["fte"] = tmp["y"].apply(lambda c: _implied_fte(float(c), alpha, beta))
+    cost_q = (
+        tmp.groupby(["quarter", "quarter_label", "quarter_order"], as_index=False)["y"]
+        .sum()
+        .rename(columns={"y": "cost"})
+    )
+    cost_q["series"] = label
+    fte_q = (
+        tmp.groupby(["quarter", "quarter_label", "quarter_order"])
+        .tail(1)[["quarter", "quarter_label", "quarter_order", "fte"]]
+        .rename(columns={"fte": "fte"})
+    )
+    fte_q["series"] = label
+    return cost_q, fte_q
+
+
 def _inject_styles() -> None:
     st.markdown(
         """
         <style>
         @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Serif:wght@500;700&display=swap');
         :root {
-          --bg: #f4f1ea;
-          --card: #fff7e8;
-          --accent: #c14b2a;
-          --ink: #2a2320;
+          --bg: #f7f9fc;
+          --card: #ffffff;
+          --primary: #009fe3;
+          --primary-dark: #004c93;
+          --secondary: #8c1d82;
+          --ink: #0a0a0a;
+          --muted: #adadad;
+          --border: #d9e1ec;
         }
         .stApp {
-          background: radial-gradient(1200px 600px at 10% -10%, #ffd7b5 0, transparent 60%),
-                      radial-gradient(1000px 500px at 90% 0%, #e8d7ff 0, transparent 55%),
-                      var(--bg);
+          background: linear-gradient(135deg, rgba(0,159,227,0.10), rgba(0,76,147,0.08)), var(--bg);
           color: var(--ink);
           font-family: "IBM Plex Sans", sans-serif;
         }
@@ -145,13 +184,13 @@ def _inject_styles() -> None:
           font-family: "IBM Plex Serif", serif;
           font-size: 2rem;
           margin-bottom: 0.2rem;
-        }
+          }
         .card {
           background: var(--card);
-          border: 1px solid rgba(0,0,0,0.08);
+          border: 1px solid var(--border);
           border-radius: 14px;
           padding: 1rem 1.2rem;
-          box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+          box-shadow: 0 8px 24px rgba(0,0,0,0.06);
         }
         .meta-grid {
           display: grid;
@@ -159,8 +198,22 @@ def _inject_styles() -> None:
           gap: 0.5rem 1rem;
           font-size: 0.95rem;
         }
-        .meta-key { color: #5a4d44; font-weight: 600; }
-        .meta-val { color: #1f1a17; }
+        .meta-key { color: var(--primary-dark); font-weight: 600; }
+        .meta-val { color: var(--ink); }
+        .stButton>button, .stDownloadButton>button {
+          background-color: var(--primary);
+          color: #ffffff;
+          border: 1px solid var(--primary-dark);
+          border-radius: 10px;
+        }
+        .stButton>button:hover {
+          background-color: var(--primary-dark);
+          border-color: var(--primary-dark);
+        }
+        .stTabs [data-baseweb="tab"] { color: var(--primary-dark); }
+        .stTabs [data-baseweb="tab-list"] { border-bottom: 1px solid var(--border); }
+        .stMetricValue { color: var(--primary-dark) !important; }
+        .stCaption, .stMarkdown { color: var(--ink); }
         </style>
         """,
         unsafe_allow_html=True,
@@ -325,11 +378,11 @@ def _render_app() -> None:
 
     chart_df = pd.concat(chart_frames, ignore_index=True)
     series_colors = {
-        "Actuals": "#1f77b4",
-        "Baseline forecast": "#c14b2a",
+        "Actuals": "#009fe3",  # primary
+        "Baseline forecast": "#00b050",  # prediction green
     }
     if v3_overlay is not None:
-        series_colors[st.session_state.get("assistant_v3_label", "AI Assistant (V3)")] = "#f2b134"
+        series_colors[st.session_state.get("assistant_v3_label", "AI Assistant (V3)")] = "#66c47d"  # compare-to-baseline green
     series_order = list(series_colors.keys())
     color_scale = alt.Scale(domain=series_order, range=[series_colors[name] for name in series_order])
 
@@ -345,6 +398,204 @@ def _render_app() -> None:
         strokeDash=[4, 4],
     ).encode(x="date:T")
     st.altair_chart(base_chart + boundary, use_container_width=True)
+
+    # Quarterly view: cost totals (bars) and end-of-quarter FTE (line)
+    cost_quarterly_frames: list[pd.DataFrame] = []
+    fte_quarterly_frames: list[pd.DataFrame] = []
+    actual_cost_df = actual_plot.rename(columns={"y": "y"})
+    cost_q, fte_q = _quarterly_cost_and_fte(actual_cost_df, "Actuals", alpha_default, beta_default)
+    cost_quarterly_frames.append(cost_q)
+    fte_quarterly_frames.append(fte_q)
+
+    base_q_cost, base_q_fte = _quarterly_cost_and_fte(baseline_plot, "Baseline forecast", alpha_default, beta_default)
+    cost_quarterly_frames.append(base_q_cost)
+    fte_quarterly_frames.append(base_q_fte)
+
+    if v3_overlay is not None:
+        overlay_df = v3_overlay.copy()
+        overlay_df["date"] = pd.to_datetime(overlay_df["date"])
+        overlay_df = overlay_df.rename(columns={"yhat": "y"})
+        overlay_label = st.session_state.get("assistant_v3_label", "Preset/Assistant (V3)")
+        overlay_cost_q, overlay_fte_q = _quarterly_cost_and_fte(overlay_df, overlay_label, alpha_default, beta_default)
+        cost_quarterly_frames.append(overlay_cost_q)
+        fte_quarterly_frames.append(overlay_fte_q)
+
+    cost_quarterly_df = pd.concat(cost_quarterly_frames, ignore_index=True)
+    fte_quarterly_df = pd.concat(fte_quarterly_frames, ignore_index=True)
+    # Ensure datetime dtype for Plotly range handling
+    cost_quarterly_df["quarter"] = pd.to_datetime(cost_quarterly_df["quarter"])
+    fte_quarterly_df["quarter"] = pd.to_datetime(fte_quarterly_df["quarter"])
+
+    # Derive quarter center positions using actual quarter length
+    quarter_end = cost_quarterly_df["quarter"] + pd.offsets.QuarterEnd(0)
+    quarter_len = (quarter_end - cost_quarterly_df["quarter"]).dt.days
+    quarter_len_days = quarter_len.iloc[0] if not quarter_len.empty else 90
+    half_q = pd.to_timedelta(quarter_len_days / 2, unit="D")
+    cost_quarterly_df["quarter_center"] = cost_quarterly_df["quarter"] + half_q
+    fte_quarterly_df["quarter_center"] = fte_quarterly_df["quarter"] + half_q
+
+    cost_quarterly_df = cost_quarterly_df.sort_values("quarter_order")
+    fte_quarterly_df = fte_quarterly_df.sort_values("quarter_order")
+    x_enc = alt.X(
+        "quarter_center:T",
+        sort=cost_quarterly_df.groupby("quarter_label")["quarter_center"].first().tolist(),
+        title="",
+        axis=alt.Axis(format="%Y-Q%q"),
+    )
+    series_list = cost_quarterly_df["series"].unique().tolist()
+    overlay_label = st.session_state.get("assistant_v3_label", "Preset/Assistant (V3)")
+    color_map = {
+        "Actuals": "#009fe3",
+        "Baseline forecast": "#00b050",  # prediction green
+        overlay_label: "#66c47d",  # comparison green
+    }
+    # Offset FTE markers slightly per series so each sits above its own bar
+    # Compute per-series x-offset so FTE markers sit centered on their own bar
+    series_list_sorted = series_list
+    base_offset = pd.Timedelta(days=quarter_len_days / (len(series_list_sorted) + 1))
+    offsets = {
+        s: pd.Timedelta(days=(idx - (len(series_list_sorted) - 1) / 2) * base_offset.days)
+        for idx, s in enumerate(series_list_sorted)
+    }
+    fte_quarterly_df["quarter_pos"] = fte_quarterly_df.apply(
+        lambda r: r["quarter_center"] + offsets.get(r["series"], pd.Timedelta(days=0)), axis=1
+    )
+
+    if not cost_quarterly_df.empty and HAS_PLOTLY:
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        for series in series_list:
+            subset = cost_quarterly_df[cost_quarterly_df["series"] == series]
+            fig.add_trace(
+                go.Bar(
+                    x=subset["quarter_center"],
+                    y=subset["cost"],
+                    name=f"{series} cost",
+                    marker_color=color_map.get(series, None),
+                    customdata=subset["quarter_label"],
+                    hovertemplate="<b>%{customdata}</b><br>%{y:,.0f}",
+                    text=None,
+                    showlegend=True,
+                ),
+                secondary_y=False,
+            )
+        fte_series_list = fte_quarterly_df["series"].unique().tolist()
+        for series in fte_series_list:
+            subset = fte_quarterly_df[fte_quarterly_df["series"] == series]
+            fig.add_trace(
+                go.Scatter(
+                    x=subset["quarter_pos"],
+                    y=subset["fte"],
+                    mode="lines+markers+text",
+                    name=f"{series} FTE",
+                    marker=dict(color=color_map.get(series, "#4c8f2f"), size=8),
+                    line=dict(color=color_map.get(series, "#4c8f2f"), width=3),
+                    text=[f"{v:,.0f}" for v in subset["fte"]],
+                    textposition="top center",
+                    hovertemplate="<b>%{text}</b><br>%{y:,.0f} FTE",
+                    showlegend=True,
+                ),
+                secondary_y=True,
+            )
+        x_range = [pd.Timestamp("2027-01-01"), pd.Timestamp("2029-12-31")]  # initial viewport
+        st.session_state["quarterly_x_range"] = x_range
+        fig.update_xaxes(
+            title_text="",
+            tickformat="%Y Q%q",
+            range=x_range,
+            autorange=False,
+            tickmode="array",
+            tickvals=cost_quarterly_df.groupby("quarter_label")["quarter_center"].first().tolist(),
+            ticktext=cost_quarterly_df["quarter_label"].unique().tolist(),
+        )
+        fig.update_layout(
+            title="FTE & Cost per Quarter",
+            barmode="group",
+            bargap=0.2,
+            height=430,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            xaxis=dict(
+                rangeselector=dict(buttons=[]),
+                rangeslider=dict(visible=True),
+            ),
+        )
+        # Re-apply range after layout to prevent any autorange overrides
+        fig.update_xaxes(range=x_range, autorange=False)
+        fig.layout.xaxis.update(range=x_range, autorange=False)
+        fig.update_yaxes(title_text="Quarterly cost", secondary_y=False, range=[0, 100_000_000])
+        fig.update_yaxes(title_text="FTE (end of quarter)", secondary_y=True)
+        st.plotly_chart(fig, use_container_width=True)
+    elif not HAS_PLOTLY:
+        st.warning("Plotly is not installed; showing limited Altair fallback. Install plotly>=5.22.0 for interactive zoom/pan.")
+        # Altair fallback with brush selection (defaults to last actual + 2y)
+        start_date = pd.to_datetime(last_actual_date)
+        end_date = start_date + pd.DateOffset(years=2)
+        brush = alt.selection_interval(encodings=["x"], init={"x": [start_date, end_date]})
+
+        base_cost = (
+            alt.Chart(cost_quarterly_df)
+            .mark_bar(opacity=0.65)
+            .encode(
+                x=x_enc,
+                y=alt.Y("cost:Q", title="Quarterly cost", scale=alt.Scale(domain=[0, 100_000_000])),
+                color=alt.Color(
+                    "series:N",
+                    legend=alt.Legend(title="Series"),
+                    scale=alt.Scale(
+                        domain=series_list,
+                        range=[color_map.get(s, "#adadad") for s in series_list],
+                    ),
+                ),
+                tooltip=["series:N", alt.Tooltip("quarter:T", format="%Y-Q%q"), alt.Tooltip("cost:Q", format=",.0f")],
+            )
+        )
+        cost_detail = base_cost.transform_filter(brush)
+        fte_detail = (
+            alt.Chart(fte_quarterly_df)
+            .mark_line(point=True, strokeWidth=3)
+            .encode(
+                x=alt.X("quarter_pos:T", title="", axis=alt.Axis(format="%Y-Q%q")),
+                y=alt.Y("fte:Q", title="FTE (end of quarter)", axis=alt.Axis(orient="right")),
+                color=alt.Color(
+                    "series:N",
+                    legend=alt.Legend(title="Series"),
+                    scale=alt.Scale(
+                        domain=series_list,
+                        range=[color_map.get(s, "#adadad") for s in series_list],
+                    ),
+                ),
+                tooltip=["series:N", alt.Tooltip("quarter:T", format="%Y-Q%q"), alt.Tooltip("fte:Q", format=",.0f")],
+            )
+            .transform_filter(brush)
+        )
+        fte_text = (
+            alt.Chart(fte_quarterly_df)
+            .mark_text(dy=-12, fontSize=11, fontWeight="bold")
+            .encode(
+                x="quarter_pos:T",
+                y="fte:Q",
+                text=alt.Text("fte:Q", format=",.0f"),
+                color=alt.Color(
+                    "series:N",
+                    legend=None,
+                    scale=alt.Scale(
+                        domain=series_list,
+                        range=[color_map.get(s, "#adadad") for s in series_list],
+                    ),
+                ),
+            )
+            .transform_filter(brush)
+        )
+        detail_layer = (
+            alt.layer(cost_detail, fte_detail, fte_text)
+            .resolve_scale(y="independent")
+            .properties(height=330, title="FTE & Cost per Quarter (Altair fallback)")
+        )
+
+        overview = (
+            base_cost.encode(y=alt.Y("cost:Q", title="")).properties(height=80)
+            .add_selection(brush)
+        )
+        st.altair_chart(detail_layer & overview, use_container_width=True)
 
     st.divider()
     st.subheader("Scenarios (V3 presets)")
