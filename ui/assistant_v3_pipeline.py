@@ -117,6 +117,12 @@ def resolve_driver_and_params(
     if driver_used == "fte" and params_v3.impact_mode == "level" and params_v3.impact_magnitude and not params_v3.fte_delta_pct and not params_v3.fte_delta_abs:
         params_v3 = params_v3.__class__(**{**params_v3.__dict__, "fte_delta_pct": params_v3.impact_magnitude, "impact_magnitude": 0.0})
         warnings.append("Interpreted level impact as FTE delta for fte driver to avoid double-counting alpha.")
+    # If driver is cost_target and params missing cost_target_pct, pull from suggestion.cost_target.target_pct if present
+    if driver_used == "cost_target" and (params_v3.cost_target_pct is None or params_v3.cost_target_pct == 0):
+        target_block = suggestion.get("cost_target") or {}
+        if target_block.get("target_pct") is not None:
+            params_v3 = params_v3.__class__(**{**params_v3.__dict__, "cost_target_pct": target_block["target_pct"]})
+            warnings.append("Filled cost_target_pct from cost_target block.")
 
     baseline_fte = fte_from_cost(ctx.t0_cost_used, ctx.alpha, ctx.beta)
     derived: Dict[str, float] = {"baseline_fte": baseline_fte, "alpha": ctx.alpha, "beta": ctx.beta}

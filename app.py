@@ -119,11 +119,15 @@ def _scenario_params_table(params: ScenarioParamsV3) -> pd.DataFrame:
         "shape": params.shape,
         "impact_mode": params.impact_mode,
         "impact_magnitude": params.impact_magnitude,
+        "beta_multiplier": params.beta_multiplier,
+        "fte_delta_pct": params.fte_delta_pct,
+        "fte_delta_abs": params.fte_delta_abs,
         "growth_delta_pp_per_year": params.growth_delta_pp_per_year,
         "drift_pp_per_year": params.drift_pp_per_year,
         "event_growth_delta_pp_per_year": params.event_growth_delta_pp_per_year,
         "event_growth_exp_multiplier": params.event_growth_exp_multiplier,
         "post_event_growth_pp_per_year": params.post_event_growth_pp_per_year,
+        "cost_target_pct": params.cost_target_pct,
     }
     df = pd.DataFrame([data]).T.reset_index().rename(columns={"index": "param", 0: "value"})
     df["value"] = df["value"].apply(lambda v: "" if v is None else str(v))
@@ -424,6 +428,14 @@ def _render_app() -> None:
         overlay_df = overlay_df.rename(columns={"yhat": "y"})
         overlay_label = st.session_state.get("assistant_v3_label", "Scenario")
         overlay_cost_q, overlay_fte_q = _quarterly_cost_and_fte(overlay_df, overlay_label, alpha_default, beta_default)
+        if not cost_q.empty:
+            last_actual_cost = cost_q.tail(1).copy()
+            last_actual_cost["series"] = overlay_label
+            overlay_cost_q = pd.concat([last_actual_cost, overlay_cost_q], ignore_index=True)
+        if not fte_q.empty:
+            last_actual_fte = fte_q.tail(1).copy()
+            last_actual_fte["series"] = overlay_label
+            overlay_fte_q = pd.concat([last_actual_fte, overlay_fte_q], ignore_index=True)
         cost_quarterly_frames.append(overlay_cost_q)
         fte_quarterly_frames.append(overlay_fte_q)
 
@@ -784,6 +796,24 @@ def _render_app() -> None:
                 f"Driver chosen: {pending_v3['driver_choice']} (inferred: {pending_v3.get('raw_suggestion', {}).get('driver') or pending_v3.get('raw_suggestion', {}).get('suggested_driver')})"
             )
             st.table(_scenario_params_table(pending_v3["params"]))
+            params = pending_v3["params"]
+            onset_txt = f"starts at T+{params.lag_months}m" if params.lag_months is not None else "start not specified"
+            ramp_txt = f"ramps over {params.onset_duration_months}m" if params.onset_duration_months else "no ramp"
+            event_txt = f"event lasts {params.event_duration_months}m" if params.event_duration_months else "event lasts to recovery"
+            recovery_txt = f"recovery over {params.recovery_duration_months}m" if params.recovery_duration_months else "no explicit recovery"
+            impact_txt = ""
+            if params.impact_mode == "level" and params.impact_magnitude:
+                impact_txt = f"level impact {params.impact_magnitude:+.0%}"
+            elif params.impact_mode == "growth" and params.growth_delta_pp_per_year:
+                impact_txt = f"growth delta {params.growth_delta_pp_per_year*100:+.1f}pp/yr"
+            st.markdown(
+                f"""
+                **Scenario development**
+                - Driver: {pending_v3['driver_choice']}; {impact_txt or 'impact not specified'}
+                - Timing: {onset_txt}; {ramp_txt}; {event_txt}; {recovery_txt}
+                - Beta multiplier: {params.beta_multiplier or 1.0:.2f}; Cost target: {params.cost_target_pct or 0:+.0%}
+                """.strip()
+            )
 
         title = rationale.get("title") or "Scenario rationale"
         st.markdown(f"**{title}**")
@@ -802,6 +832,37 @@ def _render_app() -> None:
         if sanity:
             st.caption(
                 f"Sanity check: ~{sanity.get('ten_year_multiplier_estimate', '')}x over 10y; {sanity.get('notes', '')}"
+            )
+
+        derived = pending_v3.get("derived", {}) or {}
+        if pending_v3.get("driver_choice") == "cost_target":
+            target_cost = derived.get("target_cost")
+            fte_delta = derived.get("implied_fte_delta")
+            baseline_fte = derived.get("baseline_fte")
+            target_pct = pending_v3["params"].cost_target_pct
+            params = pending_v3["params"]
+            baseline_cost = float(base_t0)
+            alpha_used = derived.get("alpha", alpha_default)
+            beta_used = derived.get("beta", beta_default)
+            variable_base = max(0.0, baseline_cost - alpha_used)
+            variable_target = max(0.0, (target_cost or baseline_cost) - alpha_used)
+            fte_after = (baseline_fte or 0) + (fte_delta or 0)
+            fte_pct = (fte_delta / baseline_fte * 100) if baseline_fte else 0.0
+            timing_bits = []
+            if params.lag_months:
+                timing_bits.append(f"starts at T+{params.lag_months}m")
+            if params.onset_duration_months:
+                timing_bits.append(f"ramps over {params.onset_duration_months}m")
+            if params.recovery_duration_months:
+                timing_bits.append(f"recovery {params.recovery_duration_months}m")
+            timing_text = " | ".join(timing_bits) if timing_bits else "applies immediately"
+            st.markdown("**Interpretation for cost target**")
+            st.markdown(
+                f"- Target cost: {target_cost:,.0f} EUR ({target_pct:+.0%}); {timing_text}<br>"
+                f"- Implied FTE change: {fte_delta:+.0f} ({fte_pct:+.1f}%) → FTE {baseline_fte:,.0f} → {fte_after:,.0f}<br>"
+                f"- Variable cost drops from {variable_base:,.0f} to {variable_target:,.0f}; fixed cost (alpha) stays at {alpha_used:,.0f}.<br>"
+                f"- Per-FTE variable beta ≈ {beta_used:,.0f}; slope resumes at baseline growth after target is reached.",
+                unsafe_allow_html=True,
             )
         with st.form("apply_suggestion_v3_form"):
             apply_clicked = st.form_submit_button("Apply suggestion", use_container_width=True)
