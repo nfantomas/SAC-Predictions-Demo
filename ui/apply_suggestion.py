@@ -29,6 +29,7 @@ def set_pending_v3(
         "label": label or "AI Assistant (V3)",
         "derived": derived or {},
     }
+    st.session_state["assistant_v3_ctx"] = ctx
 
 
 def get_pending_v3() -> Optional[Dict[str, object]]:

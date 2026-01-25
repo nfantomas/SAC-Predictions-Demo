@@ -308,6 +308,9 @@ def _render_app() -> None:
     alpha_default, beta_default = calibrate_alpha_beta(
         DEFAULT_ASSUMPTIONS.t0_cost, DEFAULT_ASSUMPTIONS.t0_fte, DEFAULT_ASSUMPTIONS.fixed_cost_share
     )
+    overlay_ctx = st.session_state.get("assistant_v3_ctx")
+    alpha_overlay = getattr(overlay_ctx, "alpha", alpha_default)
+    beta_overlay = getattr(overlay_ctx, "beta", beta_default)
     base_for_kpi = forecast.sort_values("date").reset_index(drop=True)
     scenario_for_kpi = None
     scenario_label_for_kpi = "Plan / Baseline forecast"
@@ -337,7 +340,7 @@ def _render_app() -> None:
         return scen / base - 1.0 if base else 0.0
 
     fte_base = _implied_fte(base_t0, alpha_default, beta_default)
-    fte_scen = _implied_fte(scen_t0, alpha_default, beta_default)
+    fte_scen = _implied_fte(scen_t0, alpha_overlay, beta_overlay)
     fte_delta = fte_scen - fte_base
 
     st.subheader("Forecast view")
@@ -427,7 +430,7 @@ def _render_app() -> None:
         overlay_df["date"] = pd.to_datetime(overlay_df["date"])
         overlay_df = overlay_df.rename(columns={"yhat": "y"})
         overlay_label = st.session_state.get("assistant_v3_label", "Scenario")
-        overlay_cost_q, overlay_fte_q = _quarterly_cost_and_fte(overlay_df, overlay_label, alpha_default, beta_default)
+        overlay_cost_q, overlay_fte_q = _quarterly_cost_and_fte(overlay_df, overlay_label, alpha_overlay, beta_overlay)
         if not cost_q.empty:
             last_actual_cost = cost_q.tail(1).copy()
             last_actual_cost["series"] = overlay_label
@@ -655,9 +658,9 @@ def _render_app() -> None:
     k4.markdown(f"**Cost 10Y**<br><span style='font-size:1.2rem'>{_fmt_millions(scen_y10)}</span><br>{_delta_badge(f'{_pct_delta(base_y10, scen_y10)*100:+.1f}%', scen_y10>=base_y10)}", unsafe_allow_html=True)
 
     # FTE KPIs aligned under costs
-    fte_scen_y1 = _implied_fte(scen_y1, alpha_default, beta_default)
-    fte_scen_y5 = _implied_fte(scen_y5, alpha_default, beta_default)
-    fte_scen_y10 = _implied_fte(scen_y10, alpha_default, beta_default)
+    fte_scen_y1 = _implied_fte(scen_y1, alpha_overlay, beta_overlay)
+    fte_scen_y5 = _implied_fte(scen_y5, alpha_overlay, beta_overlay)
+    fte_scen_y10 = _implied_fte(scen_y10, alpha_overlay, beta_overlay)
     fte_base_y1 = _implied_fte(base_y1, alpha_default, beta_default)
     fte_base_y5 = _implied_fte(base_y5, alpha_default, beta_default)
     fte_base_y10 = _implied_fte(base_y10, alpha_default, beta_default)
@@ -719,7 +722,7 @@ def _render_app() -> None:
     st.caption("Uses new HR presets and driver model.")
     if st.button("Example: “Inflation spike mid next year”", key="example_prompt"):
         st.session_state["assistant_v3_text"] = "Inflation spike mid next year"
-    assistant_v3_text = st.text_area("Describe a scenario (V3)", key="assistant_v3_text", placeholder="e.g., inflation shock that fades over a year")
+    assistant_v3_text = st.text_area("Describe a scenario", key="assistant_v3_text", placeholder="e.g., inflation shock that fades over a year")
 
     if st.button("Get suggestion"):
         stats = summarize_series(series_df)
@@ -748,7 +751,7 @@ def _render_app() -> None:
                 try:
                     ctx = build_driver_context(observed_t0_cost=last_actual_value, assumptions=DEFAULT_ASSUMPTIONS)
                     driver_used, params_v3, validation_warnings, derived = resolve_driver_and_params(
-                        suggestion, ctx, override_driver=None, horizon_months=len(forecast)
+                        suggestion, ctx, override_driver=None, horizon_months=len(forecast), user_text=assistant_v3_text
                     )
                 except SuggestionValidationError as exc:
                     st.error(f"Validation failed: {_safe_error_text(exc)}")
@@ -874,6 +877,7 @@ def _render_app() -> None:
                 ctx=ctx,
                 scenario_name="assistant_v3",
             )
+            st.session_state["assistant_v3_ctx"] = ctx
             st.session_state["assistant_v3_overlay"] = scenario_df
             st.session_state["assistant_v3_label"] = pending_v3.get("label", f"AI Assistant (V3) [{pending_v3['driver_choice']}]")
             st.success("Applied V3 suggestion. Overlay updated.")
