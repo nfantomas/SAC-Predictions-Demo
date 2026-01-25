@@ -27,6 +27,7 @@ from scenarios.presets_v3 import PRESETS_V3, PresetV3
 from scenarios.schema import ScenarioParamsV3
 from scenarios.validate_v3 import validate_projection
 from scenarios.v3 import DriverContext, apply_scenario_v3_simple
+from types import SimpleNamespace
 from ui.apply_suggestion import clear_pending_v3, get_pending_v3, set_pending_v3
 from ui.assistant_v3_pipeline import apply_driver_scenario, build_driver_context, parse_suggestion, resolve_driver_and_params
 
@@ -129,9 +130,92 @@ def _scenario_params_table(params: ScenarioParamsV3) -> pd.DataFrame:
         "post_event_growth_pp_per_year": params.post_event_growth_pp_per_year,
         "cost_target_pct": params.cost_target_pct,
     }
-    df = pd.DataFrame([data]).T.reset_index().rename(columns={"index": "param", 0: "value"})
-    df["value"] = df["value"].apply(lambda v: "" if v is None else str(v))
-    return df
+    return pd.DataFrame({"param": list(data.keys()), "value": list(data.values())})
+
+
+def _parse_param_value(val: object) -> object:
+    if val is None:
+        return None
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return val
+    if isinstance(val, str):
+        s = val.strip()
+        if s == "" or s.lower() in {"none", "null"}:
+            return None
+        try:
+            return int(s)
+        except ValueError:
+            try:
+                return float(s)
+            except ValueError:
+                return s
+    return val
+
+
+def _params_from_editor(df: pd.DataFrame, template: ScenarioParamsV3) -> ScenarioParamsV3:
+    cast_int = {
+        "lag_months",
+        "onset_duration_months",
+        "event_duration_months",
+        "recovery_duration_months",
+    }
+    cast_float = {
+        "impact_magnitude",
+        "growth_delta_pp_per_year",
+        "drift_pp_per_year",
+        "event_growth_delta_pp_per_year",
+        "event_growth_exp_multiplier",
+        "post_event_growth_pp_per_year",
+        "fte_delta_abs",
+        "fte_delta_pct",
+        "beta_multiplier",
+        "cost_target_pct",
+    }
+    updated = {**template.__dict__}
+    for _, row in df.iterrows():
+        key = row.get("param")
+        if key not in updated:
+            continue
+        val = _parse_param_value(row.get("value"))
+        if val is None:
+            updated[key] = None
+            continue
+        try:
+            if key in cast_int:
+                updated[key] = int(val)
+            elif key in cast_float:
+                updated[key] = float(val)
+            else:
+                updated[key] = val
+        except (TypeError, ValueError):
+            updated[key] = val
+    return template.__class__(**updated)
+
+
+def _parse_optional_int(val: str | None) -> int | None:
+    if val is None:
+        return None
+    s = str(val).strip()
+    if s == "":
+        return None
+    try:
+        return int(s)
+    except ValueError:
+        return None
+
+
+def _parse_optional_float(val: str | None) -> float | None:
+    if val is None:
+        return None
+    s = str(val).strip()
+    if s == "":
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
 
 
 def _quarterly_cost_and_fte(df: pd.DataFrame, label: str, alpha: float, beta: float) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -711,11 +795,159 @@ def _render_app() -> None:
                 st.session_state["assistant_v3_overlay"] = scenario_df
                 st.session_state["assistant_v3_label"] = f"Scenario preset: {preset.key.replace('_', ' ').title()}"
                 st.session_state["assistant_v3_suggested_driver"] = preset.params.driver or "cost"
+                st.session_state["scenario_params_current"] = preset.params
+                st.session_state["scenario_driver_current"] = preset.params.driver or "cost"
+                st.session_state["scenario_ctx_alpha"] = alpha_default
+                st.session_state["scenario_ctx_beta"] = beta_default
+                st.session_state["scenario_ctx_t0"] = DEFAULT_ASSUMPTIONS.t0_cost
+                st.session_state["scenario_label_current"] = st.session_state["assistant_v3_label"]
                 st.success(f"Applied {label}. Overlay updated.")
                 st.rerun()
-        if selected_key in PRESETS_V3:
-            st.caption(PRESETS_V3[selected_key].story or PRESETS_V3[selected_key].description)
         # Scenario summary card removed per request
+
+    current_params = st.session_state.get("scenario_params_current")
+    current_driver = st.session_state.get("scenario_driver_current")
+    current_label = st.session_state.get("scenario_label_current", "Scenario")
+    ctx_alpha_cur = st.session_state.get("scenario_ctx_alpha", alpha_default)
+    ctx_beta_cur = st.session_state.get("scenario_ctx_beta", beta_default)
+    ctx_t0_cur = st.session_state.get("scenario_ctx_t0", DEFAULT_ASSUMPTIONS.t0_cost)
+    if current_params:
+        with st.expander("Scenario parameters", expanded=False):
+            st.markdown(
+                f"**Cost base used:** {ctx_t0_cur:,.0f} EUR | **Alpha (fixed):** {ctx_alpha_cur:,.0f} | **Beta (per FTE):** {ctx_beta_cur:,.0f}<br>"
+                "Implied FTE = max(0, (cost - alpha) / beta)",
+                unsafe_allow_html=True,
+            )
+            with st.form("edit_params_unified"):
+                c1, c2 = st.columns(2)
+                lag = c1.number_input(
+                    "Lag (months)",
+                    min_value=0,
+                    step=1,
+                    value=int(current_params.lag_months),
+                    help="Start offset after t0 before changes begin.",
+                )
+                onset = c1.number_input(
+                    "Ramp duration (months)",
+                    min_value=0,
+                    step=1,
+                    value=int(current_params.onset_duration_months),
+                    help="How many months to ramp from baseline to full effect.",
+                )
+                event = c1.text_input(
+                    "Event duration (months, optional)",
+                    value="" if current_params.event_duration_months is None else str(current_params.event_duration_months),
+                    help="If set, effect persists for this many months before recovery logic applies.",
+                )
+                recovery = c1.text_input(
+                    "Recovery duration (months, optional)",
+                    value="" if current_params.recovery_duration_months is None else str(current_params.recovery_duration_months),
+                    help="Duration to return toward baseline after the event ends.",
+                )
+                shape = c1.selectbox(
+                    "Profile shape",
+                    options=["step", "linear", "exp"],
+                    index=["step", "linear", "exp"].index(current_params.shape),
+                    help="Shape of the ramp when applying the change.",
+                )
+                impact_mode = c1.selectbox(
+                    "Impact mode",
+                    options=["level", "growth"],
+                    index=["level", "growth"].index(current_params.impact_mode),
+                    help="Level shifts change the level; growth changes adjust the slope.",
+                )
+                impact_mag = c1.text_input(
+                    "Impact magnitude",
+                    value=str(current_params.impact_magnitude or 0.0),
+                    help="For level mode: percentage change to apply at full effect.",
+                )
+                beta_mult = c1.text_input(
+                    "Beta multiplier",
+                    value="" if current_params.beta_multiplier is None else str(current_params.beta_multiplier),
+                    help="Scales the variable cost per FTE (beta).",
+                )
+                fte_delta_pct = c2.text_input(
+                    "FTE delta (%)",
+                    value="" if current_params.fte_delta_pct is None else str(current_params.fte_delta_pct),
+                    help="Percent change to FTE once ramp completes (e.g., -0.1 for -10%).",
+                )
+                fte_delta_abs = c2.text_input(
+                    "FTE delta (abs)",
+                    value="" if current_params.fte_delta_abs is None else str(current_params.fte_delta_abs),
+                    help="Absolute change to FTE headcount (optional).",
+                )
+                growth_delta = c2.text_input(
+                    "Growth delta pp/year",
+                    value=str(current_params.growth_delta_pp_per_year or 0.0),
+                    help="Adjust annual growth in percentage points after the change.",
+                )
+                drift = c2.text_input(
+                    "Drift pp/year",
+                    value=str(current_params.drift_pp_per_year or 0.0),
+                    help="Slow drift applied each year (percentage points).",
+                )
+                event_growth = c2.text_input(
+                    "Event growth delta pp/year",
+                    value="" if current_params.event_growth_delta_pp_per_year is None else str(current_params.event_growth_delta_pp_per_year),
+                    help="Temporary growth delta during the event window.",
+                )
+                event_exp = c2.text_input(
+                    "Event growth exp multiplier",
+                    value="" if current_params.event_growth_exp_multiplier is None else str(current_params.event_growth_exp_multiplier),
+                    help="Exponential factor for event growth, if needed.",
+                )
+                post_growth = c2.text_input(
+                    "Post-event growth pp/year",
+                    value="" if current_params.post_event_growth_pp_per_year is None else str(current_params.post_event_growth_pp_per_year),
+                    help="Growth delta applied after the event/recovery completes.",
+                )
+                cost_target = c2.text_input(
+                    "Cost target (%)",
+                    value="" if current_params.cost_target_pct is None else str(current_params.cost_target_pct),
+                    help="Use for cost_target driver; negative for reductions (e.g., -0.1 for -10%).",
+                )
+                apply_params = st.form_submit_button("Apply parameters", use_container_width=True)
+
+                if apply_params:
+                    try:
+                        updated = ScenarioParamsV3(
+                            driver=current_driver or "cost",
+                            lag_months=int(lag),
+                            onset_duration_months=int(onset),
+                            event_duration_months=_parse_optional_int(event),
+                            recovery_duration_months=_parse_optional_int(recovery),
+                            shape=shape,
+                            impact_mode=impact_mode,
+                            impact_magnitude=float(impact_mag) if impact_mag.strip() != "" else 0.0,
+                            event_growth_delta_pp_per_year=_parse_optional_float(event_growth),
+                            event_growth_exp_multiplier=_parse_optional_float(event_exp),
+                            growth_delta_pp_per_year=float(growth_delta) if growth_delta.strip() != "" else 0.0,
+                            drift_pp_per_year=float(drift) if drift.strip() != "" else 0.0,
+                            post_event_growth_pp_per_year=_parse_optional_float(post_growth),
+                            fte_delta_abs=_parse_optional_float(fte_delta_abs),
+                            fte_delta_pct=_parse_optional_float(fte_delta_pct),
+                            beta_multiplier=_parse_optional_float(beta_mult),
+                            cost_target_pct=_parse_optional_float(cost_target),
+                        )
+                        st.session_state["scenario_params_current"] = updated
+                        st.session_state["scenario_driver_current"] = current_driver or "cost"
+                        st.session_state["scenario_ctx_alpha"] = ctx_alpha_cur
+                        st.session_state["scenario_ctx_beta"] = ctx_beta_cur
+                        st.session_state["scenario_ctx_t0"] = ctx_t0_cur
+                        ctx_obj = SimpleNamespace(alpha=ctx_alpha_cur, beta=ctx_beta_cur, t0_cost_used=ctx_t0_cur, warning=None)
+                        scenario_df = apply_driver_scenario(
+                            forecast_cost_df=forecast[["date", "yhat"]],
+                            params=updated,
+                            driver=current_driver or "cost",
+                            ctx=ctx_obj,
+                            scenario_name="scenario_custom",
+                        )
+                        st.session_state["assistant_v3_overlay"] = scenario_df
+                        st.session_state["assistant_v3_label"] = current_label
+                        st.success("Parameters applied. Overlay updated.")
+                        st.experimental_rerun()
+                    except Exception as exc:
+                        st.warning(f"Could not apply parameters: {exc}")
 
     st.divider()
     st.subheader("AI scenario assistant")
@@ -778,45 +1010,35 @@ def _render_app() -> None:
         safety = pending_v3.get("safety", {}) or {}
         warnings = pending_v3.get("warnings", [])
 
-        with st.expander("AI suggested scenario parameters", expanded=False):
-            if ctx.warning:
-                st.warning(ctx.warning)
-            if warnings:
-                st.warning("Adjusted to safe bounds: " + " | ".join(warnings))
-            safety_warnings = safety.get("warnings") or []
-            if safety_warnings:
-                st.warning("LLM safety: " + " | ".join(safety_warnings))
-            safety_adjustments = safety.get("adjustments") or []
-            if safety_adjustments:
-                st.info("Adjustments: " + " | ".join(safety_adjustments))
-
-            alpha_col, beta_col, fshare_col = st.columns(3)
-            alpha_col.metric("t0 cost used", f"{ctx.t0_cost_used:,.0f} EUR")
-            beta_col.metric("Beta (per FTE)", f"{ctx.beta:,.0f}")
-            fshare_col.metric("Alpha (fixed)", f"{ctx.alpha:,.0f}")
-            st.caption("Implied FTE (derived) = max(0, (cost - alpha) / beta)")
-            st.caption(
-                f"Driver chosen: {pending_v3['driver_choice']} (inferred: {pending_v3.get('raw_suggestion', {}).get('driver') or pending_v3.get('raw_suggestion', {}).get('suggested_driver')})"
-            )
-            st.table(_scenario_params_table(pending_v3["params"]))
-            params = pending_v3["params"]
-            onset_txt = f"starts at T+{params.lag_months}m" if params.lag_months is not None else "start not specified"
-            ramp_txt = f"ramps over {params.onset_duration_months}m" if params.onset_duration_months else "no ramp"
-            event_txt = f"event lasts {params.event_duration_months}m" if params.event_duration_months else "event lasts to recovery"
-            recovery_txt = f"recovery over {params.recovery_duration_months}m" if params.recovery_duration_months else "no explicit recovery"
-            impact_txt = ""
-            if params.impact_mode == "level" and params.impact_magnitude:
-                impact_txt = f"level impact {params.impact_magnitude:+.0%}"
-            elif params.impact_mode == "growth" and params.growth_delta_pp_per_year:
-                impact_txt = f"growth delta {params.growth_delta_pp_per_year*100:+.1f}pp/yr"
-            st.markdown(
-                f"""
-                **Scenario development**
-                - Driver: {pending_v3['driver_choice']}; {impact_txt or 'impact not specified'}
-                - Timing: {onset_txt}; {ramp_txt}; {event_txt}; {recovery_txt}
-                - Beta multiplier: {params.beta_multiplier or 1.0:.2f}; Cost target: {params.cost_target_pct or 0:+.0%}
-                """.strip()
-            )
+        if ctx.warning:
+            st.warning(ctx.warning)
+        if warnings:
+            st.warning("Adjusted to safe bounds: " + " | ".join(warnings))
+        safety_warnings = safety.get("warnings") or []
+        if safety_warnings:
+            st.warning("LLM safety: " + " | ".join(safety_warnings))
+        safety_adjustments = safety.get("adjustments") or []
+        if safety_adjustments:
+            st.info("Adjustments: " + " | ".join(safety_adjustments))
+        st.info("Parameters are ready; edit and apply them in the unified 'Scenario parameters' section.")
+        params = pending_v3["params"]
+        onset_txt = f"starts at T+{params.lag_months}m" if params.lag_months is not None else "start not specified"
+        ramp_txt = f"ramps over {params.onset_duration_months}m" if params.onset_duration_months else "no ramp"
+        event_txt = f"event lasts {params.event_duration_months}m" if params.event_duration_months else "event lasts to recovery"
+        recovery_txt = f"recovery over {params.recovery_duration_months}m" if params.recovery_duration_months else "no explicit recovery"
+        impact_txt = ""
+        if params.impact_mode == "level" and params.impact_magnitude:
+            impact_txt = f"level impact {params.impact_magnitude:+.0%}"
+        elif params.impact_mode == "growth" and params.growth_delta_pp_per_year:
+            impact_txt = f"growth delta {params.growth_delta_pp_per_year*100:+.1f}pp/yr"
+        st.markdown(
+            f"""
+            **Scenario development**
+            - Driver: {pending_v3['driver_choice']}; {impact_txt or 'impact not specified'}
+            - Timing: {onset_txt}; {ramp_txt}; {event_txt}; {recovery_txt}
+            - Beta multiplier: {params.beta_multiplier or 1.0:.2f}; Cost target: {params.cost_target_pct or 0:+.0%}
+            """.strip()
+        )
 
         title = rationale.get("title") or "Scenario rationale"
         st.markdown(f"**{title}**")
@@ -877,9 +1099,18 @@ def _render_app() -> None:
                 ctx=ctx,
                 scenario_name="assistant_v3",
             )
+            ctx_alpha_cur = getattr(ctx, "alpha", alpha_default)
+            ctx_beta_cur = getattr(ctx, "beta", getattr(ctx, "beta0", beta_default))
+            ctx_t0_cur = getattr(ctx, "t0_cost_used", DEFAULT_ASSUMPTIONS.t0_cost)
             st.session_state["assistant_v3_ctx"] = ctx
             st.session_state["assistant_v3_overlay"] = scenario_df
             st.session_state["assistant_v3_label"] = pending_v3.get("label", f"AI Assistant (V3) [{pending_v3['driver_choice']}]")
+            st.session_state["scenario_params_current"] = pending_v3["params"]
+            st.session_state["scenario_driver_current"] = pending_v3["driver_choice"]
+            st.session_state["scenario_ctx_alpha"] = ctx_alpha_cur
+            st.session_state["scenario_ctx_beta"] = ctx_beta_cur
+            st.session_state["scenario_ctx_t0"] = ctx_t0_cur
+            st.session_state["scenario_label_current"] = st.session_state["assistant_v3_label"]
             st.success("Applied V3 suggestion. Overlay updated.")
             st.rerun()
 
