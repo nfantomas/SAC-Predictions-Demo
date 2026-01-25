@@ -785,11 +785,12 @@ def _render_app() -> None:
             if btn:
                 selected_key = key
                 st.session_state["selected_preset_v3"] = key
-                ctx = DriverContext(alpha=alpha_default, beta0=beta_default)
+                ctx = build_driver_context(observed_t0_cost=last_actual_value, assumptions=DEFAULT_ASSUMPTIONS)
+                ctx_preset = DriverContext(alpha=ctx.alpha, beta0=ctx.beta)
                 scenario_df = apply_scenario_v3_simple(
                     forecast[["date", "yhat"]],
                     preset.params,
-                    context=ctx,
+                    context=ctx_preset,
                     horizon_months=len(forecast),
                 )
                 st.session_state["assistant_v3_overlay"] = scenario_df
@@ -797,9 +798,9 @@ def _render_app() -> None:
                 st.session_state["assistant_v3_suggested_driver"] = preset.params.driver or "cost"
                 st.session_state["scenario_params_current"] = preset.params
                 st.session_state["scenario_driver_current"] = preset.params.driver or "cost"
-                st.session_state["scenario_ctx_alpha"] = alpha_default
-                st.session_state["scenario_ctx_beta"] = beta_default
-                st.session_state["scenario_ctx_t0"] = DEFAULT_ASSUMPTIONS.t0_cost
+                st.session_state["scenario_ctx_alpha"] = ctx.alpha
+                st.session_state["scenario_ctx_beta"] = ctx.beta
+                st.session_state["scenario_ctx_t0"] = ctx.t0_cost_used
                 st.session_state["scenario_label_current"] = st.session_state["assistant_v3_label"]
                 st.success(f"Applied {label}. Overlay updated.")
                 st.rerun()
