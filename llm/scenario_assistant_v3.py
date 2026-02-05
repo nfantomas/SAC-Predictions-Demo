@@ -28,7 +28,11 @@ def schema_hint() -> Dict[str, object]:
 
 def build_prompts(user_text: str, horizon_years: int, baseline_stats: Dict[str, object]) -> Dict[str, str]:
     tmpl = _load_prompt_template()
-    system = tmpl.format(indications_text=user_text, horizon_years=horizon_years, baseline_stats=baseline_stats)
+    system = (
+        tmpl.replace("{indications_text}", str(user_text))
+        .replace("{horizon_years}", str(horizon_years))
+        .replace("{baseline_stats}", str(baseline_stats))
+    )
     user = user_text or "Generate a scenario JSON based on the system prompt."
     return {"system": system, "user": user}
 

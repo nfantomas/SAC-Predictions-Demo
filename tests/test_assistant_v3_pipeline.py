@@ -44,9 +44,10 @@ def test_validate_and_apply_driver_cost():
         "growth_delta_pp_per_year": 0.0,
         "drift_pp_per_year": 0.0,
     }
-    params, warnings = validate_and_prepare_params(params_dict)
+    params, warnings, result = validate_and_prepare_params(params_dict)
     assert isinstance(params, ScenarioParamsV3)
     assert warnings == [] or isinstance(warnings, list)
+    assert hasattr(result, "errors")
 
     forecast = _forecast([10_000_000.0] * 6)
     ctx = build_driver_context(observed_t0_cost=10_000_000, assumptions=Assumptions(10_000_000, 0.2, 800, 0.2))

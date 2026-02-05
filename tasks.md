@@ -1,165 +1,224 @@
-# Tasks — Auto-detect Scenario Driver in AI Scenario Assistant (V3)
+# tasks.md — M13 Validator + Prompt Improvements (Driver Model V3)
 
 ## Goal
-Remove the “Scenario driver” dropdown from the main UI. The assistant should infer the correct driver automatically from the user text and the current model context (cost/FTE driver model, fixed vs variable cost split), then produce a safe V3 suggestion that can be applied to charts.
+Stop the app from failing on realistic executive questions (e.g., “keep costs flat, what happens to FTEs?”), while still preventing absurd outputs (e.g., 100× cost increase in 10 years). Improve prompt grounding so macro/geopolitical prompts translate into visible, explainable impacts using the existing V3 methodology.
 
-**Success criteria**
-- User types scenario text and clicks **Get suggestion (V3)** → app returns:
-  - inferred driver (Cost / FTE / Cost target)
-  - parameters (V3 schema)
-  - short rationale (human-readable)
-  - impact preview + safety warnings (if any)
-- User can click **Apply suggestion** and the graph updates correctly.
-- No manual driver selection needed in the default flow.
-- The output is validated and bounded (no “100x costs in 10y” suggestions).
+## Non-goals
+- No new data sources.
+- No full rebuild of scenario engine; extend existing V3 apply + validation + prompt wiring.
+- Do not remove existing hard safety protections for NaNs/negatives/unbounded queries.
 
----
-
-## M12-01 — UI: Remove driver dropdown from default flow
-**Problem**
-The dropdown (“cost / fte / cost_target”) creates friction and uncertainty; users expect the assistant to decide.
-
-**Implementation**
-- Remove the driver selector from the main “AI scenario assistant (V3)” section.
-- Keep an **Advanced options** expander with:
-  - “Override driver (optional)” dropdown (default: auto)
-  - “Show debug payload” toggle
-
-**Acceptance**
-- Default flow has no driver input.
-- Advanced override works for testing.
+## Guardrails
+- Preserve backwards compatibility: existing V2 flow and existing V3 presets must keep working.
+- Validation must never crash the app: return structured validation results (errors/warnings) and display them.
+- Hard errors only for mathematically invalid states; “unrealistic but possible” becomes warning + explanation.
 
 ---
 
-## M12-02 — Prompt + schema: Make driver inference an explicit output
-**Problem**
-LLM currently relies on user selection; we need deterministic driver inference.
+## M13-01 Introduce ValidationResult with severity (NO MORE raising)
+**Owner:** Backend  
+**Type:** Refactor + Safety  
 
-**Implementation**
-- Update the V3 LLM prompt to:
-  - include business assumptions (baseline growth 6%/yr, inflation drift 3%/yr, fixed cost share 20% at t0, ~800 FTE at t0, alpha/beta relationship)
-  - instruct the model to **infer driver** from text:
-    - “reduce costs by X%” / “hit cost target” → `cost_target`
-    - “cut FTE” / “hiring freeze” / “outsource N FTE” → `fte`
-    - “inflation / wage increase / contractor conversion / benefit changes” → `cost`
-  - require *compact* rationale (2–5 bullets) + confidence (low/med/high)
-- Extend/confirm the LLM response schema to include:
-  - `driver`: one of `cost|fte|cost_target`
-  - `params`: ScenarioParamsV3 (existing)
-  - `rationale`: {summary, drivers[], assumptions[], confidence}
-  - `safety`: {flags[], clamped_fields[], notes}
+**Description:** Replace “raise Exception” style validation failures with a structured object:
+- `errors: list[ValidationIssue]`
+- `warnings: list[ValidationIssue]`
+- `clamps: list[ClampEvent]` (optional)
 
-**Acceptance**
-- LLM returns driver consistently for the five demo presets + free text.
-- Output is strict JSON (no markdown/code fences).
+**Acceptance criteria**
+- No validation path throws uncaught exceptions in the Streamlit UI.
+- UI shows errors/warnings in a compact banner/panel.
+- Errors block “Apply suggestion”; warnings allow apply with a visible warning.
+
+**DoD**
+- Unit tests: validator returns results for failing cases instead of raising.
 
 ---
 
-## M12-03 — Safety & validation: Clamp unrealistic outputs before apply
-**Problem**
-Even good prompts can output extreme values; must be robust.
+## M13-02 Split validation into Hard Errors vs Soft Warnings
+**Owner:** Backend  
+**Type:** Logic change  
 
-**Implementation**
-Add a central validator (or extend existing V3 validator) that:
-- Validates types and ranges for all V3 fields.
-- Enforces growth sanity:
-  - cap effective annual growth (baseline + deltas) to a reasonable band (e.g. -20% .. +20% per year) unless explicitly “catastrophe” and still bounded.
-- Enforces level sanity:
-  - cap implied 10-year cost multiple vs baseline (e.g. <= 3x) for demos; return warning + clamp.
-- Enforces timeline sanity:
-  - lag/onset/recovery durations must fit horizon; adjust or reject.
-- Emits a *user-visible* warning list when clamping occurs.
+**Description:** Implement clear categories.
 
-**Acceptance**
-- LLM cannot cause runaway curves (e.g. 100x in 10 years).
-- Apply pipeline never throws due to invalid suggestion; it either clamps or shows a clear error.
+### Hard errors (block apply)
+- Any NaN/inf in produced series.
+- Any negative costs or negative FTE after clamping (cost >= 0, FTE >= 0).
+- `alpha > cost` at any month (implied variable cost negative) after clamping and/or tolerance.
+- Out-of-range requested dates (index out of series) / inconsistent params.
+- Month-over-month jumps beyond stability cap **only if** not explicitly requested (see M13-04).
 
----
+### Soft warnings (allow apply)
+- Strong deviation vs baseline (e.g., implied FTE much lower than baseline).
+- “Aggressive” but within caps growth/level impacts.
+- Large one-time level reset (above a warning threshold but below hard cap).
 
-## M12-04 — Driver resolution layer: Translate inferred driver into apply-ready params
-**Problem**
-The apply pipeline needs deterministic behavior per driver.
-
-**Implementation**
-Create a function (single source of truth), e.g. `resolve_driver_and_params(suggestion, context)`:
-- Inputs:
-  - LLM suggestion (driver + params)
-  - model context (alpha, beta, fixed share, baseline growth, inflation drift, t0 cost, t0 FTE)
-- Behavior:
-  - `driver=cost`: apply cost-side parameters directly.
-  - `driver=fte`: convert FTE change into cost change using alpha/beta model:
-    - variable_cost = beta * FTE
-    - fixed_cost = alpha
-    - total = alpha + beta*FTE
-    - keep fixed constant unless scenario says otherwise
-  - `driver=cost_target`: compute implied FTE delta needed to reach target cost at t0 (or specified event time), then generate the FTE path + resulting cost path.
-- Output:
-  - normalized ScenarioParamsV3 suitable for `apply_scenario_v3`
-  - derived metrics: implied FTE delta, implied cost delta, alpha/beta used
-
-**Acceptance**
-- “Reduce cost 10%” produces a consistent implied FTE cut (and matches the driver model).
-- “Outsource 120 FTE” produces moderate savings, not extreme drops.
+**Acceptance criteria**
+- Scenario “keep costs at current levels, what happens to FTEs?” produces warnings at most, no hard error.
+- Existing presets still apply without errors.
 
 ---
 
-## M12-05 — UI: Show inferred driver and derived metrics clearly
-**Problem**
-Users need to understand what the assistant decided.
+## M13-03 Replace “projection multiplier” hard bound with interpretable caps
+**Owner:** Backend  
+**Type:** Validator update  
 
-**Implementation**
-In the assistant result panel, display:
-- **Driver chosen:** Cost / FTE / Cost target (with one-line explanation)
-- **Key numbers:** event start (e.g., T+6), magnitude, duration, recovery
-- **Derived:** implied FTE change (if driver=cost_target), alpha/beta used, fixed share
-- **Warnings:** safety clamps / assumptions conflicts
+**Description:** Remove/relax the current `projection multiplier 0.xx out of bounds` error. Replace with:
 
-**Acceptance**
-- User can read “Driver chosen: cost_target — you asked to reduce costs by 10%.”
-- Derived numbers are visible without expanding debug.
+1) **Cost CAGR cap (hard)** over horizon:
+- Default allowed `cost_cagr_min = -20%/yr`, `cost_cagr_max = +30%/yr`.
 
----
+2) **FTE CAGR cap (hard)** over horizon:
+- Default allowed `fte_cagr_min = -25%/yr`, `fte_cagr_max = +25%/yr`.
 
-## M12-06 — Apply Suggestion wiring: Make “Apply suggestion” robust for V3
-**Problem**
-Historically “Apply suggestion” mutated Streamlit state in ways that can break (widget key errors). We need a safe V3 path.
+3) **Baseline-relative deviation (warning)**:
+- If `scenario_cost_y10 / baseline_cost_y10 < 0.5` or `> 2.0` → warning.
+- If `scenario_fte_y10 / baseline_fte_y10 < 0.5` or `> 2.0` → warning.
 
-**Implementation**
-- Store the last validated suggestion in `st.session_state["v3_suggestion"]` (immutable dict).
-- On **Apply suggestion**:
-  - recompute scenario series using `apply_scenario_v3` (pure function)
-  - set `st.session_state["active_scenario_key"]="v3_custom"` (or similar)
-  - update chart data source from state, without modifying already-instantiated widget keys
-- Do not mutate widget-backed keys post-instantiation; instead:
-  - keep sliders (if any) in Advanced options and update via `st.session_state.update()` before creation, or use `st.form` submit pattern.
+(Thresholds configurable.)
 
-**Acceptance**
-- No Streamlit API exceptions when applying.
-- Applying multiple times works.
+**Acceptance criteria**
+- A “flat cost” scenario no longer fails just because it deviates from baseline.
+- Absurd “100× in 10 years” is blocked by CAGR cap.
 
 ---
 
-## M12-07 — Tests: Golden cases for driver inference + apply
-Add tests for:
-1) “Inflation spike mid next year” → driver=cost, lag≈6 months, permanent level step, same slope as baseline.
-2) “Freeze hiring” → driver=fte, growth slows to inflation-only (≈3%) vs baseline 6%.
-3) “Outsource 120 FTE from UK to CZ” → driver=fte, ramp over 6–12 months, moderate savings.
-4) “Convert IT contractors to employees” → driver=cost, temporary savings + then return to baseline slope.
-5) “Reduce workforce costs by 10%” → driver=cost_target, implied FTE cut consistent with alpha/beta and fixed share.
+## M13-04 Stability cap: keep MoM clamp, but make it intent-aware
+**Owner:** Backend  
+**Type:** Safety enhancement  
 
-**Acceptance**
-- Each test asserts:
-  - driver classification
-  - params validity
-  - cost multiple bounds
-  - expected trend behavior (no sudden collapse unless asked)
+**Description:** Keep the existing per-month clamp (e.g., ±50% MoM), but change handling:
+- If scenario explicitly asks for a shock (keywords detected OR LLM sets `impact_mode=level` with magnitude above a threshold), allow higher short-term MoM movement **up to a configurable shock cap** (e.g., ±80%).
+- Record clamp events in `clamps` and show them in UI as a warning (“We clamped extreme monthly changes for stability.”)
+
+**Acceptance criteria**
+- Shock prompts do not get silently flattened; they still show a visible impact.
+- Clamp is visible and explainable.
 
 ---
 
-## Optional copy tweaks (SAP-ish)
-- Rename “AI scenario assistant” → **“Scenario Copilot”**
-- Replace placeholder with: “Example: ‘Inflation spike mid next year (+5%)’”
-- Replace internal driver labels:
-  - cost → “Costs”
-  - fte → “Headcount (FTE)”
-  - cost_target → “Cost target”
+## M13-05 Prompt update: ground in driver model + expected magnitudes
+**Owner:** LLM/Prompting  
+**Type:** Prompt + schema change  
+
+**Description:** Update the V3 master prompt to include:
+- Driver model: `Cost = alpha + beta * FTE`, with demo defaults (alpha=20% of t0 cost).
+- Baseline assumptions: baseline cost growth ~6%/yr; inflation drift ~3%/yr.
+- A “translation table” from user language → V3 levers:
+  - “keep costs flat” → cost driver, set long-term growth to 0%/yr (or inflation-only if specified).
+  - “reduce costs by X%” → cost_target driver, compute implied FTE cut.
+  - “cut FTE by X%” → fte driver (cost changes via beta*FTE).
+  - macro/geopolitical shock → level reset + temporary growth delta + optional recovery.
+
+Also include **safety instructions**: avoid outputs that imply >2× or <0.5× baseline at Year-10 unless user explicitly requests “extreme”.
+
+**Acceptance criteria**
+- For “keep costs at current levels, what would happen to FTEs?” LLM chooses the correct driver automatically and emits consistent params.
+- For “simulate US invasion in 2029” LLM produces a visible impact (not a tiny default), still within validator caps.
+
+---
+
+## M13-06 Schema update: allow `scenario_driver=auto` + add rationale
+**Owner:** LLM/Backend  
+**Type:** Schema + parsing  
+
+**Description:** Extend the LLM output schema with:
+- `scenario_driver`: `auto|cost|fte|cost_target`
+- `driver_rationale`: short string (1 sentence) explaining selection (display in UI)
+
+Backend behavior:
+- If `auto`, backend resolves driver from intent heuristics + fields present.
+- If driver is present, respect it.
+
+**Acceptance criteria**
+- UI no longer asks the user to choose a driver.
+- Driver selection is displayed (e.g., “Driver: cost (you asked to keep costs flat)”).
+
+---
+
+## M13-07 Apply pipeline: use driver from LLM response to update the graph
+**Owner:** App/UI  
+**Type:** Integration  
+
+**Description:** Update “Apply suggestion” to:
+1) Parse LLM response (driver + params).
+2) Run validator → get errors/warnings/clamps.
+3) If errors: show errors, do not apply.
+4) If warnings only: apply and show warnings.
+5) Update scenario series + KPI cards + (if available) implied FTE and seniority table.
+
+**Acceptance criteria**
+- Driver coming from LLM response changes what is applied (cost vs fte vs cost_target).
+- No app crash on validation issues.
+
+---
+
+## M13-08 Add regression tests for the two failing client prompts
+**Owner:** Backend  
+**Type:** Tests  
+
+**Description:** Add tests (golden expectations) for:
+
+1) **Flat cost implies FTE**
+Prompt: “keep costs at current levels, what would happen to FTEs?”
+Expected:
+- driver = cost (or auto→cost)
+- no hard errors
+- scenario cost stays near t0 (within tolerance)
+- implied FTE non-negative and stable-ish (or declines vs baseline if baseline grows)
+
+2) **Macro shock is visible**
+Prompt: “We are a European company, simulate US invasion in 2029”
+Expected:
+- non-trivial impact vs baseline (level reset and/or temporary growth delta)
+- passes hard caps (CAGR etc.)
+- warnings allowed, no hard errors
+
+**Acceptance criteria**
+- Tests pass and prevent regression to “0.19× out of bounds” failures.
+
+---
+
+## M13-09 UI: executive-friendly explanation of warnings and clamps
+**Owner:** App/UI  
+**Type:** UX  
+
+**Description:** Add a compact component under the assistant:
+- “What changed” bullets (derived from driver + params + rationale)
+- Warnings banner with short language (no stack traces)
+- Optional “Details” expander with clamp events + thresholds
+
+**Acceptance criteria**
+- User understands why FTE changes when costs are held flat.
+- Warnings are readable and actionable.
+
+---
+
+## M13-10 Centralize thresholds into config
+**Owner:** Backend  
+**Type:** Maintainability  
+
+**Description:** Move caps/thresholds into a single config file/module (e.g., `config.py` or `validation_caps.yaml`):
+- cost_cagr_min/max
+- fte_cagr_min/max
+- baseline_relative_warn_thresholds
+- mom_stability_cap
+- shock_mom_cap
+- alpha_cost_share_default (20%)
+
+**Acceptance criteria**
+- Threshold changes require updating one place only.
+- Defaults match demo assumptions.
+
+---
+
+## Suggested demo defaults (for reference)
+- Baseline cost growth: **6%/yr**
+- Inflation drift: **3%/yr**
+- Fixed cost share at t0: **20%** (`alpha = 0.2 * t0_cost`)
+- Variable per-FTE cost: `beta = (t0_cost - alpha) / t0_fte`
+- Hard caps (defaults):
+  - Cost CAGR: **[-20%, +30%]**
+  - FTE CAGR: **[-25%, +25%]**
+  - MoM stability cap: **±50%**, shock cap **±80%** (intent-aware)
+- Baseline-relative warnings:
+  - Warn if Year-10 ratio vs baseline `<0.5` or `>2.0`

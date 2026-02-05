@@ -7,7 +7,9 @@ import numpy as np
 import pandas as pd
 
 from config import BASELINE_INFLATION_PPY, DEFAULT_ASSUMPTIONS
+from config.core import VALIDATION_CAPS
 from llm.validate_suggestion import SuggestionValidationError
+from llm.validation_result import ValidationIssue, ValidationResult
 from scenarios.schema import ScenarioParamsV3
 from scenarios.v3 import DriverContext, apply_scenario_v3_simple
 
@@ -92,15 +94,29 @@ def _baseline_series(ctx: ValidateContext) -> pd.DataFrame:
 
 
 def validate_and_sanitize(params_raw: Dict[str, object], ctx: ValidateContext | None = None) -> Tuple[ScenarioParamsV3, List[str]]:
+    """
+    Legacy signature: raises on hard failures, returns (params, warnings) otherwise.
+    """
+    params, warnings, result = validate_and_sanitize_result(params_raw, ctx=ctx)
+    if result.errors:
+        raise SuggestionValidationError("; ".join([iss.message for iss in result.errors]))
+    return params, warnings
+
+
+def validate_and_sanitize_result(params_raw: Dict[str, object], ctx: ValidateContext | None = None) -> Tuple[ScenarioParamsV3, List[str], ValidationResult]:
     ctx = ctx or ValidateContext()
     warnings: List[str] = []
+    errors: List[ValidationIssue] = []
+    clamps: List[ValidationIssue] = []
     try:
         params = ScenarioParamsV3(**params_raw)
     except Exception as exc:
-        raise SuggestionValidationError(str(exc)) from exc
+        errors.append(ValidationIssue(str(exc)))
+        return ScenarioParamsV3(), warnings, ValidationResult(errors=errors, warnings=[], clamps=clamps)  # type: ignore[arg-type]
 
     if params.lag_months < 0 or params.lag_months >= ctx.horizon_months:
-        raise SuggestionValidationError("lag_months out of range for forecast horizon.")
+        errors.append(ValidationIssue("lag_months out of range for forecast horizon."))
+        return params, warnings, ValidationResult(errors=errors, warnings=[], clamps=clamps)
 
     params, bound_warnings = _bounded_params(params)
     warnings.extend(bound_warnings)
@@ -109,27 +125,72 @@ def validate_and_sanitize(params_raw: Dict[str, object], ctx: ValidateContext | 
     driver_ctx = DriverContext(alpha=ctx.alpha, beta0=ctx.beta)
 
     scenario = apply_scenario_v3_simple(baseline, params, driver_ctx, horizon_months=ctx.horizon_months)
-    start = float(scenario["yhat"].iloc[0])
-    end = float(scenario["yhat"].iloc[-1])
-    multiplier = 0.0 if start == 0 else end / start
-    if multiplier > ctx.multiplier_max or multiplier < ctx.multiplier_min:
-        factor = (ctx.multiplier_max / multiplier) if multiplier > ctx.multiplier_max and multiplier != 0 else (multiplier / ctx.multiplier_min if multiplier != 0 else 0)
-        params = _scale_params(params, factor)
-        warnings.append(f"Clamped to keep 10y multiplier within [{ctx.multiplier_min}x, {ctx.multiplier_max}x].")
-        scenario = apply_scenario_v3_simple(baseline, params, driver_ctx, horizon_months=ctx.horizon_months)
-        start = float(scenario["yhat"].iloc[0])
-        end = float(scenario["yhat"].iloc[-1])
-        multiplier = 0.0 if start == 0 else end / start
-        if multiplier > ctx.multiplier_max or multiplier < ctx.multiplier_min:
-            raise SuggestionValidationError(f"Projection multiplier {multiplier:.2f}x out of bounds after clamping.")
+    if scenario["yhat"].isnull().any() or not np.isfinite(scenario["yhat"]).all():
+        errors.append(ValidationIssue("Scenario contains NaN/inf values."))
+        return params, warnings, ValidationResult(errors=errors, warnings=[], clamps=clamps)
 
+    # Multiplier guardrail (legacy min/max if provided)
+    start_val = float(scenario["yhat"].iloc[0])
+    end_val = float(scenario["yhat"].iloc[-1])
+    multiplier_raw = (end_val / start_val) if start_val else 1.0
+    if multiplier_raw > ctx.multiplier_max or multiplier_raw < ctx.multiplier_min:
+        errors.append(ValidationIssue(f"Projection multiplier {multiplier_raw:.2f}x outside [{ctx.multiplier_min}x, {ctx.multiplier_max}x]."))
+
+    # Alpha floor / non-negativity
+    if (scenario["yhat"] < 0).any():
+        errors.append(ValidationIssue("Scenario produces negative costs."))
     min_cost = float(scenario["yhat"].min())
     if min_cost < ctx.alpha:
-        factor = max(min_cost / ctx.alpha, 0.1)
-        params = _scale_params(params, factor)
         warnings.append("Adjusted to enforce alpha cost floor.")
-        scenario = apply_scenario_v3_simple(baseline, params, driver_ctx, horizon_months=ctx.horizon_months)
-        if float(scenario["yhat"].min()) < ctx.alpha:
-            raise SuggestionValidationError("Scenario violates alpha cost floor after clamping.")
+    # Implied FTE path
+    fte_series = (scenario["yhat"] - ctx.alpha) / ctx.beta
+    if fte_series.isnull().any() or not np.isfinite(fte_series).all():
+        errors.append(ValidationIssue("Implied FTE contains NaN/inf."))
+    if (fte_series < 0).any():
+        errors.append(ValidationIssue("Implied FTE drops below zero."))
 
-    return params, warnings
+    # CAGR caps (hard)
+    years = ctx.horizon_months / 12.0
+    start_cost = float(scenario["yhat"].iloc[0])
+    end_cost = float(scenario["yhat"].iloc[-1])
+    cost_cagr = ((end_cost / start_cost) ** (1 / years) - 1) if start_cost > 0 else 0.0
+    start_fte = float(fte_series.iloc[0])
+    end_fte = float(fte_series.iloc[-1])
+    fte_cagr = ((end_fte / start_fte) ** (1 / years) - 1) if start_fte > 0 else 0.0
+    cost_cagr_min = VALIDATION_CAPS["cost_cagr_min"]
+    cost_cagr_max = VALIDATION_CAPS["cost_cagr_max"]
+    fte_cagr_min = VALIDATION_CAPS["fte_cagr_min"]
+    fte_cagr_max = VALIDATION_CAPS["fte_cagr_max"]
+    if cost_cagr < cost_cagr_min or cost_cagr > cost_cagr_max:
+        errors.append(ValidationIssue(f"Cost CAGR {cost_cagr:.2%} outside [{cost_cagr_min:.0%}, {cost_cagr_max:.0%}]."))
+    if fte_cagr < fte_cagr_min or fte_cagr > fte_cagr_max:
+        errors.append(ValidationIssue(f"FTE CAGR {fte_cagr:.2%} outside [{fte_cagr_min:.0%}, {fte_cagr_max:.0%}]."))
+
+    # MoM stability clamp (intent-aware)
+    pct_changes = scenario["yhat"].astype(float).pct_change().fillna(0.0).abs()
+    shock_like = (params.impact_mode == "level" and abs(params.impact_magnitude) >= 0.1) or (params.beta_multiplier and abs(params.beta_multiplier - 1.0) >= 0.1)
+    cap = VALIDATION_CAPS["mom_cap_shock"] if shock_like else VALIDATION_CAPS["mom_cap_default"]
+    if (pct_changes > cap).any():
+        clamps.append(ValidationIssue(f"Monthly change exceeded {cap:.0%}; review ramp/timing."))
+
+    # Baseline deviation warnings at Year-10
+    base_cost_y10 = float(baseline["yhat"].iloc[-1])
+    scen_cost_y10 = end_cost
+    if base_cost_y10 > 0:
+        ratio = scen_cost_y10 / base_cost_y10
+        if ratio < 0.5 or ratio > 2.0:
+            warnings.append(f"Scenario cost deviates from baseline by {ratio:.2f}× at Year-10.")
+    base_fte_y10 = float(((baseline["yhat"] - ctx.alpha) / ctx.beta).iloc[-1])
+    if base_fte_y10 > 0 and end_fte is not None:
+        ratio_fte = end_fte / base_fte_y10
+        if ratio_fte < 0.5 or ratio_fte > 2.0:
+            warnings.append(f"Scenario FTE deviates from baseline by {ratio_fte:.2f}× at Year-10.")
+
+    result = ValidationResult(
+        errors=errors,
+        warnings=[ValidationIssue(m) for m in warnings],
+        clamps=clamps,
+    )
+    if errors:
+        return params, warnings, result
+    return params, warnings, result

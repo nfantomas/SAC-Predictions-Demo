@@ -7,6 +7,8 @@ import pandas as pd
 
 from scenarios.apply_scenario_v3 import apply_scenario_v3
 from scenarios.schema import ScenarioParamsV3
+from scenarios.v3 import DriverContext
+from llm.validation_result import ValidationIssue, ValidationResult
 
 
 class SuggestionValidationError(Exception):
@@ -63,7 +65,8 @@ def validate_params_bounds(params: ScenarioParamsV3) -> Tuple[ScenarioParamsV3, 
 def _simulate_multiplier(params: ScenarioParamsV3, months: int = 120) -> float:
     baseline_dates = pd.date_range("2026-01-01", periods=months, freq="MS")
     baseline = pd.DataFrame({"date": baseline_dates.date.astype(str), "yhat": [1.0] * months})
-    scenario = apply_scenario_v3(baseline, params, "safety_check")
+    ctx = DriverContext(alpha=0.2, beta0=0.001)  # assume 20% fixed on unit cost=1, beta approx 0.001 per FTE
+    scenario = apply_scenario_v3(baseline, params, ctx, "safety_check")
     first = scenario["yhat"].iloc[0]
     last = scenario["yhat"].iloc[-1]
     if first == 0:
@@ -71,10 +74,10 @@ def _simulate_multiplier(params: ScenarioParamsV3, months: int = 120) -> float:
     return last / first
 
 
-def _clamp_projection(params: ScenarioParamsV3, multiplier: float) -> Tuple[ScenarioParamsV3, str]:
+def _clamp_projection(params: ScenarioParamsV3, multiplier: float, min_floor: float = 0.1, max_ceiling: float = 3.0) -> Tuple[ScenarioParamsV3, str]:
     message = ""
-    if multiplier > 3.0:
-        factor = 3.0 / multiplier if multiplier != 0 else 0
+    if multiplier > max_ceiling:
+        factor = max_ceiling / multiplier if multiplier != 0 else 0
         scaled_impact = params.impact_magnitude * factor
         scaled_growth = params.growth_delta_pp_per_year * factor
         scaled_drift = params.drift_pp_per_year * factor
@@ -88,9 +91,9 @@ def _clamp_projection(params: ScenarioParamsV3, multiplier: float) -> Tuple[Scen
             drift_pp_per_year=scaled_drift,
             event_growth_delta_pp_per_year=scaled_event_growth,
         )
-        message = "Clamped scenario to keep 10y multiplier <= 3.0x."
-    elif multiplier < 0.2:
-        factor = multiplier / 0.2 if multiplier != 0 else 0
+        message = f"Clamped scenario to keep 10y multiplier <= {max_ceiling:.1f}x."
+    elif multiplier < min_floor:
+        factor = multiplier / min_floor if multiplier != 0 else 0
         scaled_impact = params.impact_magnitude * factor
         scaled_growth = params.growth_delta_pp_per_year * factor
         scaled_drift = params.drift_pp_per_year * factor
@@ -104,26 +107,42 @@ def _clamp_projection(params: ScenarioParamsV3, multiplier: float) -> Tuple[Scen
             drift_pp_per_year=scaled_drift,
             event_growth_delta_pp_per_year=scaled_event_growth,
         )
-        message = "Clamped scenario to keep 10y multiplier >= 0.2x."
+        message = f"Clamped scenario to keep 10y multiplier >= {min_floor:.1f}x."
     return params, message
 
 
-def validate_suggestion(params: Dict[str, object]) -> Tuple[ScenarioParamsV3, List[str]]:
+def validate_suggestion(params: Dict[str, object], return_result: bool = False) -> Tuple[ScenarioParamsV3, List[str]] | Tuple[ScenarioParamsV3, ValidationResult]:
     warnings: List[str] = []
+    errors: List[str] = []
     try:
         scenario_params = ScenarioParamsV3(**params)
     except Exception as exc:
+        errors.append(str(exc))
+        if return_result:
+            return ScenarioParamsV3(), ValidationResult(errors=[ValidationIssue(m) for m in errors])  # type: ignore[arg-type]
         raise SuggestionValidationError(str(exc)) from exc
 
     scenario_params, bound_warnings = validate_params_bounds(scenario_params)
     warnings.extend(bound_warnings)
 
     multiplier = _simulate_multiplier(scenario_params)
-    if multiplier > 3.0 or multiplier < 0.2:
-        scenario_params, clamp_msg = _clamp_projection(scenario_params, multiplier)
+    min_floor = 0.1
+    max_ceiling = 3.0
+    if multiplier > max_ceiling or multiplier < min_floor:
+        scenario_params, clamp_msg = _clamp_projection(scenario_params, multiplier, min_floor=min_floor, max_ceiling=max_ceiling)
         warnings.append(clamp_msg)
         multiplier = _simulate_multiplier(scenario_params)
-        if multiplier > 3.0 or multiplier < 0.2:
-            raise SuggestionValidationError(f"Projection multiplier {multiplier:.2f}x out of bounds after clamp.")
+        if multiplier > max_ceiling:
+            raise SuggestionValidationError(f"Projection multiplier {multiplier:.2f}x exceeds ceiling after clamp.")
+        if multiplier < min_floor:
+            # Downgrade to warning for modest reductions (common CFO ask like flat/10% FTE cuts)
+            warnings.append(f"Projection multiplier {multiplier:.2f}x is below soft floor; review long-run flat/cut scenario.")
+
+    if return_result:
+        res = ValidationResult(
+            errors=[ValidationIssue(m) for m in errors],
+            warnings=[ValidationIssue(m) for m in warnings],
+        )
+        return scenario_params, res
 
     return scenario_params, warnings

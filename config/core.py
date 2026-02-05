@@ -14,6 +14,17 @@ BASELINE_INFLATION_PPY = float(os.getenv("BASELINE_INFLATION_PPY", 0.03))
 BASELINE_GROWTH_YOY = float(os.getenv("BASELINE_GROWTH_YOY", 0.06))
 # Default baseline FTE growth (per year) representing business growth.
 BASELINE_FTE_GROWTH_YOY = float(os.getenv("BASELINE_FTE_GROWTH_YOY", 0.03))
+# Validation caps for scenario safety
+VALIDATION_CAPS = {
+    "cost_cagr_min": float(os.getenv("VAL_COST_CAGR_MIN", -0.20)),
+    "cost_cagr_max": float(os.getenv("VAL_COST_CAGR_MAX", 0.30)),
+    "fte_cagr_min": float(os.getenv("VAL_FTE_CAGR_MIN", -0.25)),
+    "fte_cagr_max": float(os.getenv("VAL_FTE_CAGR_MAX", 0.25)),
+    "baseline_dev_warn_low": float(os.getenv("VAL_BASE_DEV_WARN_LOW", 0.5)),
+    "baseline_dev_warn_high": float(os.getenv("VAL_BASE_DEV_WARN_HIGH", 2.0)),
+    "mom_cap_default": float(os.getenv("VAL_MOM_CAP_DEFAULT", 0.5)),
+    "mom_cap_shock": float(os.getenv("VAL_MOM_CAP_SHOCK", 0.8)),
+}
 
 
 def _strip_quotes(value: str) -> str:

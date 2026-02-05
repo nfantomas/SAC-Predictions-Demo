@@ -1,4 +1,6 @@
 {
+  "scenario_driver": "auto|cost|fte|cost_target",
+  "driver_rationale": "string",
   "suggested_driver": "cost|fte|cost_target",
   "params": {
     "driver": "cost|fte|cost_target",

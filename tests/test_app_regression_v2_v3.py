@@ -1,4 +1,6 @@
 import json
+from pathlib import Path
+
 import pandas as pd
 
 from model.cost_driver import calibrate_alpha_beta
@@ -38,8 +40,9 @@ def test_v3_apply_smoke():
 def test_driver_resolution_with_fixture():
     fixture = json.loads(Path("demo/llm/fixtures/reduce_costs_10pct.json").read_text())
     ctx = build_driver_context(observed_t0_cost=10_000_000)
-    driver_used, params, warnings, derived = resolve_driver_and_params(fixture, ctx, override_driver="auto", horizon_months=120)
+    driver_used, params, warnings, derived, val_result = resolve_driver_and_params(fixture, ctx, override_driver="auto", horizon_months=120)
     assert driver_used == "cost_target"
     assert params.cost_target_pct is not None
     assert isinstance(warnings, list)
     assert isinstance(derived, dict)
+    assert hasattr(val_result, "errors")

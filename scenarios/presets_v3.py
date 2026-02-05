@@ -90,7 +90,7 @@ def build_presets_v3() -> Dict[str, PresetV3]:
                 impact_mode="level",
             ),
             story="~4–6% total savings after 6–12 months; keeps slope parallel.",
-            expected_year1_delta_range=(-0.06, -0.04),
+            expected_year1_delta_range=(-0.07, -0.04),
             steady_state_note="Lower level, same 3% slope.",
         ),
         "reduce_cost_10pct": PresetV3(

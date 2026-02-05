@@ -447,6 +447,10 @@ def _render_app() -> None:
         chart_frames.append(v3_plot)
 
     chart_df = pd.concat(chart_frames, ignore_index=True)
+    scenario_warnings = st.session_state.get("scenario_warnings_current", [])
+    if scenario_warnings:
+        st.warning("Warnings: " + " | ".join(scenario_warnings))
+
     series_colors = {
         "Actual": "#009fe3",  # primary
         "Plan / Baseline forecast": "#00b050",  # prediction green
@@ -802,6 +806,7 @@ def _render_app() -> None:
                 st.session_state["scenario_ctx_beta"] = ctx.beta
                 st.session_state["scenario_ctx_t0"] = ctx.t0_cost_used
                 st.session_state["scenario_label_current"] = st.session_state["assistant_v3_label"]
+                st.session_state["scenario_warnings_current"] = []
                 st.success(f"Applied {label}. Overlay updated.")
                 st.rerun()
         # Scenario summary card removed per request
@@ -812,8 +817,11 @@ def _render_app() -> None:
     ctx_alpha_cur = st.session_state.get("scenario_ctx_alpha", alpha_default)
     ctx_beta_cur = st.session_state.get("scenario_ctx_beta", beta_default)
     ctx_t0_cur = st.session_state.get("scenario_ctx_t0", DEFAULT_ASSUMPTIONS.t0_cost)
+    scenario_warnings = st.session_state.get("scenario_warnings_current", [])
     if current_params:
         with st.expander("Scenario parameters", expanded=False):
+            if scenario_warnings:
+                st.warning("Warnings: " + " | ".join(scenario_warnings))
             st.markdown(
                 f"**Cost base used:** {ctx_t0_cur:,.0f} EUR | **Alpha (fixed):** {ctx_alpha_cur:,.0f} | **Beta (per FTE):** {ctx_beta_cur:,.0f}<br>"
                 "Implied FTE = max(0, (cost - alpha) / beta)",
@@ -936,6 +944,13 @@ def _render_app() -> None:
                         st.session_state["scenario_ctx_beta"] = ctx_beta_cur
                         st.session_state["scenario_ctx_t0"] = ctx_t0_cur
                         ctx_obj = SimpleNamespace(alpha=ctx_alpha_cur, beta=ctx_beta_cur, t0_cost_used=ctx_t0_cur, warning=None)
+                        _, _, val_res = validate_and_sanitize_result(updated.__dict__, ctx=ValidateContext(horizon_months=len(forecast)))
+                        if val_res.errors:
+                            for issue in val_res.errors:
+                                st.error(issue.message)
+                            raise Exception("Validation errors present")
+                        warning_msgs = [w.message for w in getattr(val_res, "warnings", [])] + [c.message for c in getattr(val_res, "clamps", [])]
+                        st.session_state["scenario_warnings_current"] = warning_msgs
                         scenario_df = apply_driver_scenario(
                             forecast_cost_df=forecast[["date", "yhat"]],
                             params=updated,
@@ -983,13 +998,21 @@ def _render_app() -> None:
                 }
                 try:
                     ctx = build_driver_context(observed_t0_cost=last_actual_value, assumptions=DEFAULT_ASSUMPTIONS)
-                    driver_used, params_v3, validation_warnings, derived = resolve_driver_and_params(
+                    driver_used, params_v3, validation_warnings, derived, val_result = resolve_driver_and_params(
                         suggestion, ctx, override_driver=None, horizon_months=len(forecast), user_text=assistant_v3_text
                     )
                 except SuggestionValidationError as exc:
                     st.error(f"Validation failed: {_safe_error_text(exc)}")
                     clear_pending_v3()
                 else:
+                    if getattr(val_result, "errors", []):
+                        for issue in getattr(val_result, "errors", []):
+                            st.error(issue.message)
+                        clear_pending_v3()
+                        return
+                    validation_warnings = validation_warnings + [w.message for w in getattr(val_result, "warnings", [])]
+                    clamp_msgs = [c.message for c in getattr(val_result, "clamps", [])]
+                    validation_warnings.extend(clamp_msgs)
                     st.session_state["assistant_v3_suggested_driver"] = driver_used
                     set_pending_v3(
                         params=params_v3,
@@ -1112,6 +1135,8 @@ def _render_app() -> None:
             st.session_state["scenario_ctx_beta"] = ctx_beta_cur
             st.session_state["scenario_ctx_t0"] = ctx_t0_cur
             st.session_state["scenario_label_current"] = st.session_state["assistant_v3_label"]
+            st.session_state["scenario_warnings_current"] = pending_v3.get("warnings", [])
+            st.session_state["scenario_driver_rationale_current"] = derived.get("driver_rationale")
             st.success("Applied V3 suggestion. Overlay updated.")
             st.rerun()
 

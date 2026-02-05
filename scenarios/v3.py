@@ -118,15 +118,20 @@ def apply_scenario_v3_simple(
             start_idx=params.lag_months,
             ramp_months=params.onset_duration_months,
         )
-    if params.cost_target_pct:
-        # Convert cost target into an effective FTE delta on variable portion
+    if params.cost_target_pct is not None:
+        # Hold or reset total cost to the requested target, then let beta inflation imply the FTE path.
         target_cost = baseline_cost["yhat"].iloc[0] * (1.0 + params.cost_target_pct)
-        fte0 = fte_series.iloc[0]
-        variable_target = max(0.0, target_cost - alpha)
-        delta_pct = (variable_target / beta_series.iloc[0] / fte0) - 1.0 if fte0 else 0.0
-        fte_series = apply_fte_step_or_ramp(
-            fte_series, delta=delta_pct, start_idx=params.lag_months, ramp_months=params.onset_duration_months
-        )
+        target_fte_series = ((target_cost - alpha) / beta_eff.iloc[:horizon]).clip(lower=0.0)
+        adjusted = fte_series.copy()
+        start = min(max(params.lag_months, 0), horizon - 1)
+        ramp = max(params.onset_duration_months or 0, 0)
+        for idx in range(start, horizon):
+            if ramp and idx < start + ramp:
+                factor = profile_factor("linear", idx - start, ramp)
+                adjusted[idx] = fte_series[idx] * (1.0 - factor) + target_fte_series[idx] * factor
+            else:
+                adjusted[idx] = target_fte_series[idx]
+        fte_series = adjusted
 
     costs = cost_from_fte(alpha, beta_eff.iloc[:horizon], fte_series.iloc[:horizon])
     if params.impact_mode == "level" and params.impact_magnitude:

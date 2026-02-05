@@ -8,7 +8,7 @@ import pandas as pd
 
 from config import Assumptions, DEFAULT_ASSUMPTIONS
 from llm.validate_suggestion import SuggestionValidationError
-from llm.validate_v3 import ValidateContext, validate_and_sanitize
+from llm.validate_v3 import ValidateContext, validate_and_sanitize_result
 from model.driver_model import compute_alpha_beta, cost_from_fte, fte_from_cost, resolve_t0_cost
 from scenarios.apply_scenario_v3 import apply_scenario_v3
 from scenarios.v3 import DriverContext as ScenarioDriverContext
@@ -77,11 +77,9 @@ def apply_driver_scenario(
     return scenario
 
 
-def validate_and_prepare_params(params: Dict[str, object]) -> Tuple[ScenarioParamsV3, list[str]]:
-    try:
-        return validate_and_sanitize(params, ctx=ValidateContext())
-    except SuggestionValidationError:
-        raise
+def validate_and_prepare_params(params: Dict[str, object]) -> Tuple[ScenarioParamsV3, list[str], object]:
+    params_v3, warnings, result = validate_and_sanitize_result(params, ctx=ValidateContext())
+    return params_v3, warnings, result
 
 
 def resolve_driver_and_params(
@@ -90,20 +88,25 @@ def resolve_driver_and_params(
     override_driver: str | None = None,
     horizon_months: int = 120,
     user_text: str | None = None,
-) -> Tuple[str, ScenarioParamsV3, list[str], Dict[str, float]]:
+) -> Tuple[str, ScenarioParamsV3, list[str], Dict[str, float], object]:
     """
     Decide driver, validate params, and compute derived metrics.
     """
     override = (override_driver or "").strip().lower()
+    scenario_driver = (suggestion.get("scenario_driver") or "auto").lower()
     driver_inferred = (suggestion.get("driver") or suggestion.get("suggested_driver") or "").lower()
-    if driver_inferred not in ("cost", "fte", "cost_target"):
+    if scenario_driver == "auto":
+        driver_used = driver_inferred
+    else:
+        driver_used = scenario_driver
+    if driver_used not in ("cost", "fte", "cost_target"):
         raise SuggestionValidationError("LLM response missing a valid driver (cost|fte|cost_target).")
-    driver_used = driver_inferred if override in ("", "auto") else override
+    driver_used = driver_used if override in ("", "auto") else override
     if driver_used not in ("cost", "fte", "cost_target"):
         raise SuggestionValidationError("Driver override must be one of cost|fte|cost_target.")
 
     raw_params = suggestion.get("params", {})
-    params_v3, warnings = validate_and_sanitize(raw_params, ctx=ValidateContext(horizon_months=horizon_months))
+    params_v3, warnings, val_result = validate_and_sanitize_result(raw_params, ctx=ValidateContext(horizon_months=horizon_months))
 
     # If driver is FTE but only a level impact is provided (no explicit FTE deltas), convert impact to an FTE delta
     if driver_used == "fte" and params_v3.impact_mode == "level" and params_v3.impact_magnitude and not params_v3.fte_delta_pct and not params_v3.fte_delta_abs:
@@ -151,6 +154,9 @@ def resolve_driver_and_params(
 
     baseline_fte = fte_from_cost(ctx.t0_cost_used, ctx.alpha, ctx.beta)
     derived: Dict[str, float] = {"baseline_fte": baseline_fte, "alpha": ctx.alpha, "beta": ctx.beta}
+    driver_rationale = suggestion.get("driver_rationale")
+    if driver_rationale:
+        derived["driver_rationale"] = driver_rationale
     if driver_used == "cost_target" and params_v3.cost_target_pct is not None:
         target_cost = ctx.t0_cost_used * (1 + params_v3.cost_target_pct)
         implied_fte = fte_from_cost(target_cost, ctx.alpha, ctx.beta)
@@ -161,4 +167,4 @@ def resolve_driver_and_params(
             derived["implied_fte_delta"] = baseline_fte * params_v3.fte_delta_pct
         if params_v3.fte_delta_abs is not None:
             derived["implied_fte_delta"] = params_v3.fte_delta_abs
-    return driver_used, params_v3, warnings, derived
+    return driver_used, params_v3, warnings, derived, val_result
