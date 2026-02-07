@@ -19,7 +19,6 @@ from narrative.generator import summarize_series
 from narrative.scenario_assistant import suggest_scenario
 from llm.provider import LLMError
 from llm.scenario_assistant_v3 import request_suggestion
-from ui.ai_assistant_two_step import render_two_step_assistant
 from llm.validate_suggestion import SuggestionValidationError
 from model.cost_driver import calibrate_alpha_beta
 from pipeline.cache import CacheError, load_cache, load_cache_meta_raw
@@ -450,7 +449,7 @@ def _render_app() -> None:
     chart_df = pd.concat(chart_frames, ignore_index=True)
     scenario_warnings = st.session_state.get("scenario_warnings_current", [])
     if scenario_warnings:
-        st.warning("Warnings: " + " | ".join(scenario_warnings))
+        st.info("Scenario notes available in 'Scenario parameters'.")
 
     series_colors = {
         "Actual": "#009fe3",  # primary
@@ -658,7 +657,7 @@ def _render_app() -> None:
         )
         st.plotly_chart(fig, use_container_width=True)
     elif not HAS_PLOTLY:
-        st.warning("Plotly is not installed; showing limited Altair fallback. Install plotly>=5.22.0 for interactive zoom/pan.")
+        st.info("Plotly is not installed; showing limited Altair fallback. Install plotly>=5.22.0 for interactive zoom/pan.")
         # Altair fallback with brush selection (defaults to last actual + 2y)
         start_date = pd.to_datetime(last_actual_date)
         end_date = start_date + pd.DateOffset(years=2)
@@ -964,10 +963,8 @@ def _render_app() -> None:
                         st.success("Parameters applied. Overlay updated.")
                         st.experimental_rerun()
                     except Exception as exc:
-                        st.warning(f"Could not apply parameters: {exc}")
+                        st.error(f"Could not apply parameters: {exc}")
 
-    st.divider()
-    render_two_step_assistant(series_df, forecast, last_actual_value)
     st.divider()
     st.subheader("AI scenario assistant")
     st.caption("Uses new HR presets and driver model.")
@@ -1038,12 +1035,12 @@ def _render_app() -> None:
         warnings = pending_v3.get("warnings", [])
 
         if ctx.warning:
-            st.warning(ctx.warning)
+            st.info(ctx.warning)
         if warnings:
-            st.warning("Adjusted to safe bounds: " + " | ".join(warnings))
+            st.info("Adjusted to safe bounds: " + " | ".join(warnings))
         safety_warnings = safety.get("warnings") or []
         if safety_warnings:
-            st.warning("LLM safety: " + " | ".join(safety_warnings))
+            st.info("LLM safety: " + " | ".join(safety_warnings))
         safety_adjustments = safety.get("adjustments") or []
         if safety_adjustments:
             st.info("Adjustments: " + " | ".join(safety_adjustments))
