@@ -17,6 +17,7 @@ poetry run python -m demo.smoke
 ## Common Commands
 ```bash
 poetry run pytest -q
+poetry run python -m demo.assistant_v3_eval --csv eval_questions_answers.csv --out data/cache/assistant_v3_eval_results.csv
 poetry run python -m demo.auth_check
 poetry run python -m demo.des_check
 poetry run python -m demo.refresh --source sac
@@ -46,6 +47,19 @@ streamlit run app.py
 1) `poetry run python -m demo.auth_check` → expect `OK <timestamp>` and `DES OK`
 2) `poetry run python -m demo.refresh --source sac` → expect cache written and `CACHE_META` summary
 3) `poetry run pytest -q` → all green for unit tests
+
+## One-command eval round (with benchmark compare)
+Use one command to run a full assistant eval round, write the run log, write scorecards, compare against the previous benchmark if available, and update the benchmark:
+
+```bash
+poetry run python -m demo.assistant_v3_eval --csv eval_questions_answers.csv --out data/cache/assistant_v3_eval_results.csv
+```
+
+Artifacts written:
+- `data/cache/assistant_v3_eval_results.csv`
+- `data/cache/assistant_v3_eval_results_scorecard.md`
+- `data/cache/assistant_v3_eval_results_scorecard.json`
+- `evals/benchmark/assistant_v3_eval_benchmark.json` (tracked benchmark for team-wide comparison)
 
 ## MCP Server (minimal)
 Start the server:

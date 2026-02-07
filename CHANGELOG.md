@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Added one-command Assistant V3 eval round output (`--out`) that now writes log + scorecard markdown/json, auto-loads prior benchmark if present, compares current vs benchmark in markdown (`current / benchmark`), and updates a tracked benchmark artifact at `evals/benchmark/assistant_v3_eval_benchmark.json`.
 - Fixed SAC timeseries pagination to preserve duplicate-looking facts for correct monthly FTE aggregation.
 - Switched SAC DES paging to server-driven nextLink without forced paging to keep totals consistent.
 - Added OpenAI LLM provider with auto-selection and updated LLM tooling to support ChatGPT keys.

@@ -1,0 +1,25 @@
+id,question,expected_driver,predicted_driver,driver_match,param_sign_matches,param_sign_total,param_exact_matches,param_exact_total,summary_keyword_coverage,assumptions_keyword_coverage,checks_keyword_coverage,warnings_count,error,overall_pass
+Q01,reduction of FTEs due to 10% efficiency gains due to implementation of AI,fte,fte,True,1,1,1,3,0.625,0.286,0.167,11,,True
+Q02,what will happen with FTEs if we want to keep costs at current level,cost_target,cost_target,True,1,1,0,2,0.875,0.75,0.375,2,,True
+Q03,hiring freeze from 2028,fte,fte,True,0,0,1,2,0.625,0.5,0.333,2,,True
+Q04,pressure from aging population,fte,cost,False,0,1,2,3,0.625,0.125,0.0,14,,False
+Q05,"If we cap total labor cost growth at 2% YoY, what is the maximum headcount we can support given projected wage inflation?",cost_target,unknown,False,0,0,0,0,0.0,0.0,0.0,0,Cost target driver requires cost_target_pct.,False
+Q06,What FTE reduction is needed to offset 6% wage inflation while keeping total labor cost flat?,cost_target,fte,False,0,0,0,2,0.625,0.625,0.25,5,,False
+Q07,"If we increase average salary by 5% to improve retention, how does that change required hiring volumes and total cost?",cost,cost,True,2,2,1,3,0.375,0.125,0.25,8,,True
+Q08,What is the FTE and cost impact if attrition rises from 10% to 18% for two years?,fte,fte,True,0,0,1,3,0.375,0.125,0.0,5,,True
+Q09,"What hiring plan is required to maintain headcount if retirement eligibility spikes (e.g., 25% of workforce eligible by 2030)?",fte,fte,True,0,1,1,3,0.25,0.25,0.0,2,,True
+Q10,What happens if we introduce a 4-day workweek (reduced hours) in one region—what FTE backfill is required?,fte,fte,True,1,1,1,2,0.5,0.25,0.333,2,,True
+Q11,"If we increase utilization targets from 75% to 82%, how many FTEs can we avoid hiring?",fte,fte,True,0,0,0,2,0.875,0.2,0.0,4,,True
+Q12,"If sick leave increases by 1.5 days per FTE per year, what is the effective capacity loss and required headcount?",fte,fte,True,1,1,0,3,0.625,0.25,0.5,3,,True
+Q13,"If we consolidate two departments and remove duplicate management layers, what is the new FTE and cost baseline?",fte,fte,True,1,1,1,2,0.25,0.375,0.0,0,,True
+Q14,"If we outsource a process that currently consumes 80 FTE, what is the expected cost delta?",fte,fte,True,0,1,2,4,0.375,0.125,0.333,0,,True
+Q15,What happens if we relocate 200 FTE from a high-cost country to a lower-cost country over 3 years?,mix_shift,cost,False,1,1,1,3,0.25,0.2,0.75,0,,False
+Q16,"If union negotiations result in +7% wage increase plus reduced working hours, what is the combined impact?",cost,cost,True,1,1,1,3,0.5,0.2,0.0,10,,True
+Q17,"If we introduce a minimum wage increase affecting 15% of roles, what is the total cost impact?",cost,cost,True,1,1,1,2,0.5,0.286,0.333,0,,True
+Q18,"If we implement RPA/automation reducing transaction workload by 25% in Finance Ops, what FTE reduction is feasible by 2029?",fte,fte,True,1,1,2,3,0.25,0.286,0.167,10,,True
+Q19,"If we invest in training that improves productivity 2% per quarter for 2 years, what headcount trajectory results?",fte,fte,True,1,1,3,3,0.75,0.429,0.0,3,,True
+Q20,"If AI adoption is delayed by 18 months, what is the cost of delay in incremental FTE needs?",fte,fte,True,0,0,0,2,0.5,0.4,0.333,4,,True
+Q21,"If we set a constraint “no layoffs,” how do we achieve a 10% cost reduction (redeployments, hiring slowdown, attrition)?",cost_target,cost_target,True,1,1,1,2,0.75,0.429,0.25,6,,True
+Q22,"If we set a constraint “keep FTE flat,” what wage/bonus/benefit levers must change to hit a 5% cost reduction?",cost,cost,True,1,1,1,2,0.625,0.333,0.0,0,,True
+Q23,"If we set a constraint “keep total cost flat,” how many FTE must be reduced given expected inflation and promotions?",cost_target,cost_target,True,1,1,1,2,0.625,0.6,0.4,2,,True
+Q24,"If we simulate an economic downturn (revenue -10%, hiring slowdown, higher attrition), what is the recommended workforce plan to stabilize costs?",mix_shift,cost_target,False,2,2,3,4,0.5,0.125,0.333,4,,False
