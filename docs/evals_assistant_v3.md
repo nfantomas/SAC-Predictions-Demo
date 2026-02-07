@@ -70,7 +70,7 @@ When `--out` is provided, it writes:
 - log CSV to `--out`
 - scorecard Markdown to `<out_stem>_scorecard.md`
 - scorecard JSON to `<out_stem>_scorecard.json`
-- benchmark JSON to `evals/benchmark/assistant_v3_eval_benchmark.json` (tracked in git)
+- benchmark is loaded from `evals/benchmark/assistant_v3_eval_benchmark.json` (tracked in git) when present
 
 You can also set explicit paths:
 
@@ -87,9 +87,16 @@ Benchmark compare (Markdown shows `current / benchmark` on numeric fields):
 ```bash
 poetry run python -m demo.assistant_v3_eval \
   --csv eval_questions_answers.csv \
+  --log-out data/cache/assistant_v3_eval_results.csv
+```
+
+Update benchmark only when intended:
+
+```bash
+poetry run python -m demo.assistant_v3_eval \
+  --csv eval_questions_answers.csv \
   --log-out data/cache/assistant_v3_eval_results.csv \
-  --benchmark-in evals/benchmark/assistant_v3_eval_benchmark.json \
-  --benchmark-out evals/benchmark/assistant_v3_eval_benchmark.json
+  --update-benchmark
 ```
 
 Scorecard uses `answer_score`:
@@ -99,3 +106,19 @@ Scorecard uses `answer_score`:
 - `3`: decent match
 
 `answer_score` is LLM-graded during CLI eval runs (`demo.assistant_v3_eval`), with automatic fallback to heuristic scoring only if grading call fails.
+
+## Stability harness (N runs per prompt)
+
+Run repeated evals and write per-run metrics to JSONL:
+
+```bash
+poetry run python -m evals.run_evals --csv eval_questions_answers.csv --n 3 --out evals/results.jsonl
+```
+
+Each JSONL record includes:
+- `suggested_driver`
+- `key_params`
+- `ten_year_multiplier_estimate`
+- `warning_summary_count`
+- `hard_fail`
+- `latency_ms`

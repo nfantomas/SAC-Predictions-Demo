@@ -112,6 +112,11 @@ def main() -> None:
         help="Optional path to store current run scorecard as benchmark JSON.",
     )
     parser.add_argument(
+        "--update-benchmark",
+        action="store_true",
+        help="Overwrite benchmark with this run (off by default to keep benchmark stable).",
+    )
+    parser.add_argument(
         "--llm-timeout-seconds",
         type=int,
         default=None,
@@ -183,7 +188,7 @@ def main() -> None:
     if not scorecard_md_out and (args.out or args.log_out):
         target = Path(log_out)
         scorecard_md_out = str(target.with_name(f"{target.stem}_scorecard.md"))
-    if not benchmark_out:
+    if args.update_benchmark and not benchmark_out:
         benchmark_out = str(DEFAULT_BENCHMARK_PATH)
 
     benchmark_scorecard = None
@@ -204,11 +209,13 @@ def main() -> None:
         score_path = Path(scorecard_out)
         _write_json(scorecard, score_path)
         print(f"Wrote scorecard: {score_path}")
-    if benchmark_out:
+    if benchmark_out and args.update_benchmark:
         benchmark_path = Path(benchmark_out)
         benchmark_path.parent.mkdir(parents=True, exist_ok=True)
         _write_json(scorecard, benchmark_path)
         print(f"Wrote benchmark: {benchmark_path}")
+    elif benchmark_out and not args.update_benchmark:
+        print("Skipped benchmark write (use --update-benchmark to overwrite benchmark).")
     if scorecard_md_out:
         md_path = Path(scorecard_md_out)
         _write_text(scorecard_to_markdown(scorecard, benchmark_scorecard=benchmark_scorecard), md_path)

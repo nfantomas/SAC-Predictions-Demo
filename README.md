@@ -49,7 +49,8 @@ streamlit run app.py
 3) `poetry run pytest -q` → all green for unit tests
 
 ## One-command eval round (with benchmark compare)
-Use one command to run a full assistant eval round, write the run log, write scorecards, compare against the previous benchmark if available, and update the benchmark:
+Use one command to run a full assistant eval round, write the run log, write scorecards, and compare against the previous benchmark if available.  
+By default this does **not** overwrite the benchmark:
 
 ```bash
 poetry run python -m demo.assistant_v3_eval --csv eval_questions_answers.csv --out data/cache/assistant_v3_eval_results.csv
@@ -59,7 +60,12 @@ Artifacts written:
 - `data/cache/assistant_v3_eval_results.csv`
 - `data/cache/assistant_v3_eval_results_scorecard.md`
 - `data/cache/assistant_v3_eval_results_scorecard.json`
-- `evals/benchmark/assistant_v3_eval_benchmark.json` (tracked benchmark for team-wide comparison)
+
+To explicitly update the benchmark:
+
+```bash
+poetry run python -m demo.assistant_v3_eval --csv eval_questions_answers.csv --out data/cache/assistant_v3_eval_results.csv --update-benchmark
+```
 
 ## MCP Server (minimal)
 Start the server:

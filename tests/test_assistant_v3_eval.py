@@ -3,7 +3,15 @@ from pathlib import Path
 
 import pytest
 
-from evals.assistant_v3_eval import build_scorecard, load_eval_cases, run_eval_case, select_eval_cases
+from evals.assistant_v3_eval import (
+    EvalResult,
+    build_scorecard,
+    load_eval_cases,
+    run_eval_case,
+    score_answer,
+    scorecard_to_markdown,
+    select_eval_cases,
+)
 
 
 def _write_case_csv(path: Path) -> None:
@@ -144,3 +152,85 @@ def test_build_scorecard_has_summary_and_question_scores(tmp_path: Path):
     assert scorecard["summary"]["total_questions"] == 1
     assert scorecard["summary"]["total_matches"] == 1
     assert scorecard["questions"][0]["answer_score"] in (1, 2, 3)
+
+
+def test_score_answer_forces_zero_on_driver_mismatch():
+    result = EvalResult(
+        case_id="QBAD",
+        question="test",
+        expected_driver="fte",
+        predicted_driver="cost",
+        driver_match=False,
+        param_sign_matches=0,
+        param_sign_total=0,
+        param_exact_matches=0,
+        param_exact_total=0,
+        summary_keyword_coverage=1.0,
+        assumptions_keyword_coverage=1.0,
+        checks_keyword_coverage=1.0,
+        warnings_count=0,
+        latency_ms=1,
+        answer_text="strong answer text",
+        llm_raw_excerpt="",
+        error=None,
+    )
+    score, reason = score_answer(result)
+    assert score == 0
+    assert "predicted driver differs" in reason
+
+
+def test_scorecard_markdown_shows_na_benchmark_latency_when_missing():
+    current = {
+        "summary": {
+            "total_questions": 1,
+            "total_matches": 1,
+            "total_passes": 1,
+            "total_errors": 0,
+            "match_rate": 1.0,
+            "pass_rate": 1.0,
+            "average_answer_score": 3.0,
+            "answer_score_distribution": {0: 0, 1: 0, 2: 0, 3: 1},
+            "average_latency_ms": 1234.5,
+        },
+        "questions": [
+            {
+                "id": "Q1",
+                "question": "q",
+                "expected_driver": "fte",
+                "predicted_driver": "fte",
+                "driver_match": True,
+                "overall_pass": True,
+                "answer_score": 3,
+                "answer_score_reason": "ok",
+                "warnings_count": 0,
+                "latency_ms": 1234,
+                "param_sign_matches": 0,
+                "param_sign_total": 0,
+                "param_exact_matches": 0,
+                "param_exact_total": 0,
+                "error": "",
+            }
+        ],
+    }
+    benchmark = {
+        "summary": {
+            "total_questions": 1,
+            "total_matches": 1,
+            "total_passes": 1,
+            "total_errors": 0,
+            "match_rate": 1.0,
+            "pass_rate": 1.0,
+            "average_answer_score": 2.0,
+            "answer_score_distribution": {0: 0, 1: 0, 2: 1, 3: 0},
+            "average_latency_ms": 0.0,
+        },
+        "questions": [
+            {
+                "id": "Q1",
+                "latency_ms": 0,
+            }
+        ],
+    }
+    md = scorecard_to_markdown(current, benchmark_scorecard=benchmark)
+    assert "Average latency (ms): 1234.5 / N/A" in md
+    assert "Latency (ms): `1234 / N/A`" in md

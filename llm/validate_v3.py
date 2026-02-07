@@ -10,7 +10,7 @@ from config import BASELINE_INFLATION_PPY, DEFAULT_ASSUMPTIONS
 from config.core import VALIDATION_CAPS
 from config.validation_caps import caps_for_severity
 from llm.validate_suggestion import SuggestionValidationError
-from llm.validation_result import ValidationIssue, ValidationResult
+from llm.validation_result import ValidationIssue, ValidationResult, summarize_warnings
 from scenarios.schema import ScenarioParamsV3
 from scenarios.v3 import DriverContext, apply_scenario_v3_simple
 from scenarios.normalize_params import normalize_params
@@ -38,6 +38,9 @@ def _scale_params(params: ScenarioParamsV3, factor: float) -> ScenarioParamsV3:
         impact_magnitude=params.impact_magnitude * factor,
         growth_delta_pp_per_year=params.growth_delta_pp_per_year * factor,
         drift_pp_per_year=params.drift_pp_per_year * factor,
+        fte_delta_pct=(params.fte_delta_pct * factor if params.fte_delta_pct is not None else None),
+        fte_delta_abs=(params.fte_delta_abs * factor if params.fte_delta_abs is not None else None),
+        cost_target_pct=(params.cost_target_pct * factor if params.cost_target_pct is not None else None),
         event_growth_delta_pp_per_year=(
             params.event_growth_delta_pp_per_year * factor if params.event_growth_delta_pp_per_year is not None else None
         ),
@@ -125,6 +128,11 @@ def validate_and_sanitize_result(params_raw: Dict[str, object], ctx: ValidateCon
         errors.append(ValidationIssue("lag_months out of range for forecast horizon."))
         return params, warnings, ValidationResult(errors=errors, warnings=[], clamps=clamps)
 
+    # Hard invariant: fixed component cannot exceed configured t0 total cost.
+    if ctx.alpha > ctx.t0_cost:
+        errors.append(ValidationIssue("alpha > cost_at_t0 is invalid (negative variable cost)."))
+        return params, warnings, ValidationResult(errors=errors, warnings=[], clamps=clamps)
+
     params, bound_warnings = _bounded_params(params)
     warnings.extend(bound_warnings)
 
@@ -136,25 +144,57 @@ def validate_and_sanitize_result(params_raw: Dict[str, object], ctx: ValidateCon
         errors.append(ValidationIssue("Scenario contains NaN/inf values."))
         return params, warnings, ValidationResult(errors=errors, warnings=[], clamps=clamps)
 
-    # Multiplier guardrail (legacy min/max if provided)
-    start_val = float(scenario["yhat"].iloc[0])
-    end_val = float(scenario["yhat"].iloc[-1])
-    multiplier_raw = (end_val / start_val) if start_val else 1.0
-    if multiplier_raw > ctx.multiplier_max or multiplier_raw < ctx.multiplier_min:
-        warnings.append(f"Projection multiplier {multiplier_raw:.2f}x outside [{ctx.multiplier_min}x, {ctx.multiplier_max}x].")
+    # Soft-clamp loop for projection/momentum instead of blocking.
+    for _ in range(6):
+        start_val = float(scenario["yhat"].iloc[0])
+        end_val = float(scenario["yhat"].iloc[-1])
+        multiplier_raw = (end_val / start_val) if start_val else 1.0
+        pct_changes = scenario["yhat"].astype(float).pct_change().fillna(0.0).abs()
+        shock_like = (params.impact_mode == "level" and abs(params.impact_magnitude) >= 0.1) or (
+            params.beta_multiplier and abs(params.beta_multiplier - 1.0) >= 0.1
+        )
+        cap = caps["mom_cap_shock"] if shock_like else caps["mom_cap_default"]
+        max_jump = float(pct_changes.max()) if len(pct_changes) else 0.0
+
+        need_multiplier_clamp = multiplier_raw > ctx.multiplier_max or multiplier_raw < ctx.multiplier_min
+        need_mom_clamp = max_jump > cap
+        if not need_multiplier_clamp and not need_mom_clamp:
+            break
+
+        factor = 1.0
+        if multiplier_raw > ctx.multiplier_max:
+            factor = min(factor, ctx.multiplier_max / multiplier_raw)
+        elif multiplier_raw < ctx.multiplier_min and multiplier_raw > 0:
+            factor = min(factor, multiplier_raw / ctx.multiplier_min)
+        if need_mom_clamp and max_jump > 0:
+            factor = min(factor, cap / max_jump)
+
+        # Do not spin forever; if we cannot improve by scaling, keep fail-open with warnings.
+        if factor >= 0.999:
+            if need_multiplier_clamp:
+                warnings.append(
+                    f"Projection multiplier {multiplier_raw:.2f}x outside [{ctx.multiplier_min}x, {ctx.multiplier_max}x]."
+                )
+            if need_mom_clamp:
+                clamps.append(ValidationIssue(f"Monthly change exceeded {cap:.0%}; review ramp/timing."))
+            break
+
+        params = _scale_params(params, factor)
+        clamps.append(ValidationIssue(f"Applied safety scaling factor {factor:.3f} to keep scenario within guardrails."))
+        scenario = apply_scenario_v3_simple(baseline, params, driver_ctx, horizon_months=ctx.horizon_months)
+        if scenario["yhat"].isnull().any() or not np.isfinite(scenario["yhat"]).all():
+            errors.append(ValidationIssue("Scenario contains NaN/inf values after safety scaling."))
+            return params, warnings, ValidationResult(errors=errors, warnings=[], clamps=clamps)
 
     # Alpha floor / non-negativity
     if (scenario["yhat"] < 0).any():
         errors.append(ValidationIssue("Scenario produces negative costs."))
-    min_cost = float(scenario["yhat"].min())
-    if min_cost < ctx.alpha:
-        errors.append(ValidationIssue("Scenario cost drops below alpha fixed-cost floor."))
     # Implied FTE path
     fte_series = (scenario["yhat"] - ctx.alpha) / ctx.beta
     if fte_series.isnull().any() or not np.isfinite(fte_series).all():
-        errors.append(ValidationIssue("Implied FTE contains NaN/inf."))
+        warnings.append("Implied FTE contains NaN/inf values; check parameter coherence.")
     if (fte_series < 0).any():
-        errors.append(ValidationIssue("Implied FTE drops below zero."))
+        warnings.append("Implied FTE drops below zero in this path; consider softer ramp/impact.")
 
     # CAGR caps (hard)
     years = ctx.horizon_months / 12.0
@@ -173,9 +213,11 @@ def validate_and_sanitize_result(params_raw: Dict[str, object], ctx: ValidateCon
     if fte_cagr < fte_cagr_min or fte_cagr > fte_cagr_max:
         warnings.append(f"FTE CAGR {fte_cagr:.2%} outside [{fte_cagr_min:.0%}, {fte_cagr_max:.0%}].")
 
-    # MoM stability clamp (intent-aware)
+    # MoM stability warning if still high after scaling attempts.
     pct_changes = scenario["yhat"].astype(float).pct_change().fillna(0.0).abs()
-    shock_like = (params.impact_mode == "level" and abs(params.impact_magnitude) >= 0.1) or (params.beta_multiplier and abs(params.beta_multiplier - 1.0) >= 0.1)
+    shock_like = (params.impact_mode == "level" and abs(params.impact_magnitude) >= 0.1) or (
+        params.beta_multiplier and abs(params.beta_multiplier - 1.0) >= 0.1
+    )
     cap = caps["mom_cap_shock"] if shock_like else caps["mom_cap_default"]
     if (pct_changes > cap).any():
         clamps.append(ValidationIssue(f"Monthly change exceeded {cap:.0%}; review ramp/timing."))
@@ -193,18 +235,18 @@ def validate_and_sanitize_result(params_raw: Dict[str, object], ctx: ValidateCon
         if ratio_fte < caps["baseline_dev_warn_low"] or ratio_fte > caps["baseline_dev_warn_high"]:
             warnings.append(f"Scenario FTE deviates from baseline by {ratio_fte:.2f}× at Year-10.")
 
-    deduped_warnings = []
-    seen = set()
-    for message in warnings:
-        if message not in seen:
-            seen.add(message)
-            deduped_warnings.append(message)
+    summary, details = summarize_warnings(
+        warnings=warnings,
+        clamps=[c.message for c in clamps],
+        normalizations=normalization_warnings,
+        max_items=5,
+    )
 
     result = ValidationResult(
         errors=errors,
-        warnings=[ValidationIssue(m) for m in deduped_warnings],
-        clamps=clamps,
+        warnings=[ValidationIssue(m) for m in details],
+        clamps=[ValidationIssue(m) for m in summary],
     )
     if errors:
         return params, warnings, result
-    return params, warnings, result
+    return params, summary, result

@@ -17,6 +17,7 @@ def test_normalizes_whole_number_percent():
     assert normalized.fte_delta_pct == 0.02
     assert normalized.cost_target_pct == -0.15
     assert len(warnings) == 4
+    assert all("assuming percent units" in w for w in warnings)
 
 
 def test_no_change_for_decimals():

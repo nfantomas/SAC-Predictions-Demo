@@ -411,6 +411,12 @@ def _score_answer_heuristic(result: EvalResult) -> tuple[int, str]:
 
 
 def score_answer(result: EvalResult) -> tuple[int, str]:
+    # Hard rule for scorecard consistency: non-match or runtime error is always score 0.
+    if result.error:
+        return 0, f"No match due to runtime error: {result.error}"
+    if not result.driver_match:
+        return 0, "No match: predicted driver differs from expected driver."
+
     # Use LLM grading when possible; fallback preserves offline/test reliability.
     heuristic_score, heuristic_reason = _score_answer_heuristic(result)
     if os.getenv("EVAL_ANSWER_SCORE_WITH_LLM", "0") != "1":
@@ -513,6 +519,7 @@ def scorecard_to_markdown(scorecard: Dict[str, Any], benchmark_scorecard: Dict[s
     benchmark_questions = (benchmark_scorecard or {}).get("questions", [])
     benchmark_by_id = {str(q.get("id", "")): q for q in benchmark_questions}
     has_latency = any((q.get("latency_ms") or 0) > 0 for q in questions)
+    benchmark_has_latency = any((q.get("latency_ms") or 0) > 0 for q in benchmark_questions)
     avg_latency = summary.get("average_latency_ms", 0.0)
     lines: List[str] = []
     lines.append("# Assistant V3 Eval Scorecard")
@@ -538,7 +545,8 @@ def scorecard_to_markdown(scorecard: Dict[str, Any], benchmark_scorecard: Dict[s
         + _fmt_cmp_num(summary.get("average_answer_score", 0.0), benchmark_summary.get("average_answer_score"))
     )
     if has_latency:
-        lines.append("- Average latency (ms): " + _fmt_cmp_num(avg_latency, benchmark_summary.get("average_latency_ms")))
+        benchmark_avg_latency = benchmark_summary.get("average_latency_ms") if benchmark_has_latency else "N/A"
+        lines.append("- Average latency (ms): " + _fmt_cmp_num(avg_latency, benchmark_avg_latency))
     else:
         lines.append("- Average latency (ms): N/A (latency not captured in this run)")
     lines.append("")

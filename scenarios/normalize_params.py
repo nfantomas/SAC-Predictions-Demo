@@ -33,7 +33,7 @@ def normalize_params(params: ScenarioParamsV3) -> Tuple[ScenarioParamsV3, List[s
         normalized, changed = _normalize_value(raw)
         if changed:
             updates[field] = normalized
-            warnings.append(f"Normalized {field}: {raw} → {normalized} (assumed percent input).")
+            warnings.append(f"Normalized {field} {raw} -> {normalized} assuming percent units.")
     if updates:
         params = replace(params, **updates)
     return params, warnings

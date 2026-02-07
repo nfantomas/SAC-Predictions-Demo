@@ -62,10 +62,19 @@ def _resolve_base_url() -> str:
     return base.rstrip("/")
 
 
-def _request_payload(system_prompt: str, user_prompt: str, model: str, max_tokens: int) -> Dict[str, Any]:
+def _request_payload(
+    system_prompt: str,
+    user_prompt: str,
+    model: str,
+    max_tokens: int,
+    temperature: float,
+    top_p: float,
+) -> Dict[str, Any]:
     payload = {
         "model": model,
         "max_tokens": max_tokens,
+        "temperature": temperature,
+        "top_p": top_p,
         "system": system_prompt,
         "messages": [
             {
@@ -162,8 +171,10 @@ def generate_json(system_prompt: str, user_prompt: str, schema_hint: Optional[Di
     model = (os.getenv("ANTHROPIC_MODEL") or DEFAULT_MODEL).strip() or DEFAULT_MODEL
     timeout = int(os.getenv("LLM_TIMEOUT_SECONDS", "600"))
     max_retries = int(os.getenv("LLM_MAX_RETRIES", "3"))
-    max_tokens = int(os.getenv("LLM_MAX_TOKENS", "4096"))
-    payload = _request_payload(system_prompt, user_prompt, model, max_tokens)
+    max_tokens = max(int(os.getenv("LLM_MAX_TOKENS", "4096")), 4096)
+    temperature = float(os.getenv("LLM_TEMPERATURE", "0"))
+    top_p = float(os.getenv("LLM_TOP_P", "1"))
+    payload = _request_payload(system_prompt, user_prompt, model, max_tokens, temperature, top_p)
     if schema_hint:
         payload["system"] = f"{system_prompt}\nReturn JSON matching this schema: {schema_hint}"
 

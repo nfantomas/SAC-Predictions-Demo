@@ -1,224 +1,214 @@
-# tasks.md — LLM Evals for Scenario Assistant (Non-binary, 0–3 scoring)
+# Tasks: Stabilize single-step AI Scenario Assistant (V3) and make validation fail-open
 
-## Purpose
-Create a **simple, repeatable eval harness** to assess the quality of the Scenario Assistant outputs (single-step V3), using the prepared dataset of sample questions + expected answer shape. Evals must:
-- run **automatically** (LLM-as-judge)
-- produce **4-level scores**: `0,1,2,3`
-- be **diagnostic**, not just pass/fail (surface why a score was given and what to improve)
-- be **stable enough** to compare changes across iterations (prompt/guardrails/UI/apply logic)
+## Goal
+Improve consistency and reliability of **single-step** V3 scenario generation using Anthropic Opus, while keeping the **existing output JSON schema unchanged**.  
+Key outcomes:
+- Deterministic-ish outputs (much less run-to-run variance).
+- Fewer “crazy” trajectories (e.g., 100x costs), fewer blocked responses.
+- Guardrails become **helpful (clamp + warn)** rather than blocking for common queries.
+- Clear, concise warning summaries in UI (≤ 5), with full detail available.
 
-**Input dataset:** `eval_questions_answers.csv` (generated earlier).
-
----
-
-## Status legend
-- `NOT STARTED`
-- `IN PROGRESS`
-- `IN QA`
-- `BLOCKED`
-- `DONE`
+## Non-goals
+- Do **not** reintroduce 2-step / 1.5-step pipeline.
+- Do **not** change the output schema (keys/structure must remain identical).
+- Do **not** add new scenario model parameters; use existing parameters.
 
 ---
 
-## Milestone M-EVAL — Evaluation System (LLM-graded)
-**Milestone goal:** One command runs evals end-to-end and produces a scored report + actionable breakdown.
+## M15-01 — Make LLM calls as deterministic as possible
+### Description
+Reduce randomness from the model call itself so repeated runs of the same prompt yield similar JSON.
 
-### M-EVAL Task List
+### Implementation
+- In Anthropic client call:
+  - Set `temperature = 0`.
+  - If available, set `top_p = 1`.
+  - Ensure `max_tokens` is sufficient to avoid truncation (truncation causes JSON repair drift).
+  - Ensure you do **not** combine multiple conflicting system prompts; use a single system instruction block (or merge into one).
 
-#### M-EVAL-01 — Define eval rubric (0–3) + scoring guidelines (shared contract)
-- **Status:** NOT STARTED
-- **Owner (Dev):** AI/Backend Dev
-- **QA:** QA Engineer
-- **Description:**
-  Create a clear rubric for judging model answers against expectations from `eval_questions_answers.csv`. The rubric must be:
-  - **non-binary** with four levels (0–3)
-  - consistent across scenario types (cost, fte, cost_target, mix_shift, etc.)
-  - explicit about what counts as “messy but good reasoning” (score 1) vs “reasonable” (score 2)
-  - aligned to the demo’s business logic (Cost = α + β·FTE; fixed share ~20%; baseline growth ~6% YoY; inflation ~3% YoY)
-- **Deliverable:** `evals/rubric.md`
-- **Definition of done:**
-  - Rubric defines scores **0,1,2,3** with:
-    - **Required conditions**
-    - **Common failure modes**
-    - **Examples** for at least 5 prompt types (cost constraint, FTE reduction, shock, hiring freeze, mix shift)
-  - Rubric clarifies how to treat:
-    - missing details (should the judge penalize vs allow)
-    - “ask clarification” answers (when they are acceptable)
-    - guardrail clamps (when they are acceptable)
-  - Rubric is referenced by the judge prompt (M-EVAL-03) verbatim or summarized precisely.
-- **What to test (QA):**
-  - Rubric review against 10 random questions: QA can independently score and the rubric yields consistent outcomes (low ambiguity).
-  - Ensure rubric includes a section **“how to score clarifications”**.
+### Definition of Done
+- Running the same question 10 times produces:
+  - No truncation / incomplete JSON.
+  - ≥ 8/10 runs choose the same `suggested_driver`.
+  - Parameter magnitudes are within a narrow band (no “sometimes tiny, sometimes huge” shifts).
+
+### QA / Checks
+- Run the existing harness 10 times for:
+  - “If sick leave increases by 1.5 days…”
+  - “keep costs at current levels, what happens to FTEs?”
+  - “reduce costs by 10% with no layoffs”
+- Compare outputs: driver choice and 10-year multiplier should not swing wildly.
 
 ---
 
-#### M-EVAL-02 — Create eval dataset loader + normalization (CSV → eval cases)
-- **Status:** NOT STARTED
-- **Owner (Dev):** Backend Dev
-- **QA:** QA Engineer
-- **Description:**
-  Implement a loader that reads `eval_questions_answers.csv` and yields a structured `EvalCase` object used by the harness.
-  Required fields:
-  - `id`, `question`
-  - `expected_driver`
-  - `expected_answer_summary`
-  - `expected_params_json`
-  - `assumptions_to_mention`
-  - `must_include_checks`
-- **Deliverable:** `evals/dataset.py` + `evals/types.py`
-- **Definition of done:**
-  - `EvalCase` is a dataclass/pydantic model with validation.
-  - Loader fails fast with actionable error if a required column is missing.
-  - `expected_params_json` is parsed into an object; parse errors are reported with case id.
-  - Supports filtering by ids (e.g., `--ids Q01,Q02`) and sampling (e.g., `--limit 20`).
-- **What to test (QA):**
-  - Unit tests:
-    - loads the CSV and returns correct count
-    - malformed JSON in `expected_params_json` → clear error includes case id
-    - `--ids` filter returns correct subset
+## M15-02 — Prompt hardening: explicit units, minimal-knob guidance by driver, built-in self-consistency
+### Description
+The biggest sources of “nonsense” are unit ambiguity (e.g., 5 vs 0.05) and overuse of knobs. Improve the prompt to:
+1) eliminate unit ambiguity,
+2) encourage sparse parameterization,
+3) require internal consistency checks.
+
+### Implementation
+**A) Units (critical)**
+- Add a prominent rule near the top:
+  - “All percentages are decimals: 0.05 = 5%. Never output 5 for 5%.”
+- Add 2–3 explicit examples inside the prompt:
+  - `beta_multiplier: 1.05` means +5% variable cost.
+  - `cost_target_pct: -0.10` means -10% target.
+  - `growth_delta_pp_per_year: -0.02` means -2 percentage points per year (in decimal form).
+
+**B) Minimal parameterization (soft driver templates)**
+- Without changing schema, add “preferred minimal set” guidance (soft rules):
+  - If driver=`cost_target`: primarily set `cost_target_pct`, timing/ramp fields; keep growth/drift near 0 unless user explicitly asks.
+  - If driver=`fte`: set `fte_delta_abs` or `fte_delta_pct`, timing/ramp fields; only set `beta_multiplier` if wage/price assumption changes.
+  - If driver=`cost`: use `impact_mode` + `impact_magnitude` or growth deltas; avoid cost_target/fte deltas unless the user explicitly requests.
+
+**C) Self-consistency requirement (no schema change)**
+- Instruct model that `rationale.sanity_checks.ten_year_multiplier_estimate` must be a **number** and should match the narrative magnitude.
+- Require the model to mention any clamps in `safety.adjustments` (already in schema).
+
+### Definition of Done
+- For a fixed set of 20 eval questions:
+  - ≥ 90% of responses use decimal units correctly (no “5” for 5%).
+  - Responses set only a small subset of params (most remain 0/null) unless the question demands complexity.
+  - Outputs are valid JSON matching schema every time.
+
+### QA / Checks
+- Regression checklist:
+  - `abs(cost_target_pct) <= 0.5` and is decimal.
+  - `abs(growth_delta_pp_per_year) <= 0.5` and is decimal.
+  - `ten_year_multiplier_estimate` parses as float.
 
 ---
 
-#### M-EVAL-03 — Implement LLM-as-judge prompt (uses rubric + expected outputs) and scoring (0–3)
-- **Status:** NOT STARTED
-- **Owner (Dev):** AI Dev
-- **QA:** QA Engineer
-- **Description:**
-  Build a judge that scores a **candidate answer** produced by the app (LLM output + applied scenario summary) against the expected content.
-  Judge inputs per case must include:
-  - user question
-  - model output JSON (driver + params + explanation)
-  - short computed outcomes (e.g., year-1/5/10 multipliers vs baseline; direction of cost/FTE change)
-  - expected fields from CSV (`expected_driver`, `expected_answer_summary`, `expected_params_json`, checks)
-  - rubric text
-- **Deliverable:** `evals/judge.py` + `evals/judge_prompt.md`
-- **Definition of done:**
-  - Judge returns strict JSON:
-    ```json
-    {
-      "score": 0|1|2|3,
-      "reasons": ["..."],
-      "missing_or_wrong": ["..."],
-      "strengths": ["..."],
-      "suggested_fix": "one short suggestion",
-      "flags": {
-        "unit_error_suspected": true|false,
-        "driver_mismatch": true|false,
-        "unsafe_magnitude": true|false
-      }
-    }
-    ```
-  - Judge enforces score meaning:
-    - **0**: wrong driver or wrong direction / nonsensical
-    - **1**: messy but shows correct reasoning, incomplete/mistuned params
-    - **2**: reasonable and mostly aligned, minor issues
-    - **3**: correct driver + plausible params + clear rationale + meets must-include checks
-  - Judge explicitly checks “must_include_checks” and uses them to justify score.
-  - The judge prompt includes **unit guidance** (decimals vs percent) so it can flag suspected unit errors.
-- **What to test (QA):**
-  - Unit tests with *golden* candidate answers (handcrafted) to ensure judge returns expected score:
-    - one clearly wrong (expect 0)
-    - one messy but correct reasoning (expect 1)
-    - one reasonable (expect 2)
-    - one ideal (expect 3)
-  - Contract test: judge output must be valid JSON and contain all keys.
+## M15-03 — Validator: “helpful not blocking” (fail-open), with strict hard-invariant errors only
+### Description
+Current guardrails often block realistic questions. Convert most “errors” into clamp+warn, and only block on true invariants.
+
+### Implementation
+**A) Keep as hard errors only**
+- NaN/Inf values.
+- Negative cost anywhere in produced series.
+- `alpha > cost_at_t0` (implies negative variable portion).
+- Missing required fields / invalid schema / cannot parse JSON.
+
+**B) Convert these to clamp + warning**
+- 10-year multiplier / CAGR caps → clamp growth/impact to safe range and warn.
+- Monthly change exceeding cap → smooth/clamp and warn.
+- “Projection multiplier out of bounds” → do not error; apply safe clamp and warn.
+
+**C) Warning summarization**
+- Deduplicate repeated clamp messages (same field + same clamp).
+- Provide a short summary (≤ 5 bullets) and keep full details in logs/expander.
+
+### Definition of Done
+- For all eval questions:
+  - The system returns an answer (applies a scenario) unless it violates hard invariants.
+  - No “Validation failed … out of bounds” errors for common asks.
+  - User sees ≤ 5 warning bullets by default.
+
+### QA / Tests
+- Automated run across eval CSV:
+  - Hard failures ≤ 2% (and only invariant violations).
+  - Summary warnings ≤ 5 each run.
+- Unit tests for: clamp->warning; warning dedup; fail-open path.
 
 ---
 
-#### M-EVAL-04 — Build eval runner to execute the app logic and collect candidate outputs
-- **Status:** NOT STARTED
-- **Owner (Dev):** Backend Dev
-- **QA:** QA Engineer
-- **Description:**
-  Implement an eval runner that:
-  1) loads cases
-  2) calls the **same code path** as the Streamlit assistant (prompt → LLM → parse → normalize → validate → apply)
-  3) captures:
-     - raw LLM output
-     - parsed suggestion object
-     - validation warnings/clamps
-     - computed outcomes summary vs baseline
-  4) invokes judge
-  5) writes a report
-- **Deliverable:** `evals/run.py` + CLI entry `python -m evals.run`
-- **Definition of done:**
-  - Command runs:
-    - `python -m evals.run --input eval_questions_answers.csv --model <candidate_model> --judge_model <judge_model> --out reports/eval_report.json`
-  - Uses environment config for API keys; secrets never printed.
-  - Runner has `--dry-run` mode that uses stored candidate outputs (no API calls).
-  - Produces per-case records with:
-    - `case_id`, `score`, `reasons`, `flags`
-    - candidate `scenario_driver`
-    - warning summary count
-    - key metrics (year-1/5/10 multipliers vs baseline)
-- **What to test (QA):**
-  - Integration (no real LLM): run with `--dry-run` and fixtures → report produced.
-  - Integration (real LLM optional): run `--limit 3` end-to-end and confirm no crashes.
+## M15-04 — Auto-normalize percent-as-whole-number (single warning)
+### Description
+Even with prompt improvements, occasional percent-as-whole-number will occur. Normalize automatically.
+
+### Implementation
+For percent-like fields:
+- `impact_magnitude`, `growth_delta_pp_per_year`, `drift_pp_per_year`, `event_growth_delta_pp_per_year`, `cost_target_pct`, `fte_delta_pct`
+If `abs(value) > 1.5`:
+- divide by 100 (assume percent input)
+- add **one** warning: “Normalized 5 → 0.05 assuming percent units.”
+Ensure normalization is idempotent (doesn’t re-normalize).
+
+### Definition of Done
+- If model outputs `5` where `0.05` is expected, the system:
+  - normalizes,
+  - warns once,
+  - and continues.
+
+### QA / Tests
+- Unit tests:
+  - input: `cost_target_pct=10` → normalized to `0.10`, warning emitted once.
+  - input: `growth_delta_pp_per_year=-8` → normalized to `-0.08`.
 
 ---
 
-#### M-EVAL-05 — Reporting: summary table + failure clustering (where to improve)
-- **Status:** NOT STARTED
-- **Owner (Dev):** Backend Dev
-- **QA:** QA Engineer
-- **Description:**
-  Convert raw per-case results into actionable insights:
-  - distribution of scores
-  - top recurring failure reasons
-  - driver mismatch rate
-  - suspected unit error rate
-  - unsafe magnitude flags
-- **Deliverable:** `evals/report.py` producing:
-  - `reports/eval_report.json` (full)
-  - `reports/eval_summary.csv` (flat table)
-  - `reports/eval_summary.md` (human-readable)
-- **Definition of done:**
-  - `eval_summary.md` includes:
-    - score histogram
-    - worst 10 cases (score 0/1) with reasons
-    - grouped failure categories with counts (e.g., unit errors, driver mismatch, unrealistic magnitude, missing assumptions)
-    - 3–5 prioritized next improvements (auto-generated or templated)
-- **What to test (QA):**
-  - Run report generator on fixture results and verify outputs created and non-empty.
-  - Ensure markdown contains the required sections.
+## M15-05 — Universal capacity/productivity intent heuristic (prompt-level)
+### Description
+Many workforce questions are capacity-related (sick leave, 4-day week, utilization targets, efficiency gains). We want general guidance that works across the eval set.
+
+### Implementation (prompt only; no schema change)
+- Add rule:
+  - “If the question is about maintaining output/capacity given reduced effective hours/productivity, default to **FTE driver** unless the user explicitly requests cost-only.”
+- Add examples:
+  - “sick leave ↑”, “4-day week”, “utilization ↓”, “productivity ↑” → usually `fte`.
+  - “cap total cost growth at X%” → `cost_target`.
+
+### Definition of Done
+- Driver choice is stable for capacity-style questions (≥ 8/10 repeats match expected).
+
+### QA
+- Add a small driver-selection regression set (10 prompts) and assert expected driver.
 
 ---
 
-#### M-EVAL-06 — CI-friendly “regression gate” (optional but recommended)
-- **Status:** NOT STARTED
-- **Owner (Dev):** DevOps Dev
-- **QA:** QA Lead
-- **Description:**
-  Add a lightweight regression check that can run in CI without calling real LLMs by using stored candidate outputs + stored judge outputs.
-- **Deliverable:** `tests/test_eval_regression.py` + `evals/fixtures/*`
-- **Definition of done:**
-  - CI job runs eval regression tests offline.
-  - Fails if:
-    - schema breaks
-    - reporting breaks
-    - warning summarizer exceeds max
-  - Does NOT require network or API keys.
-- **What to test (QA):**
-  - On clean checkout: `pytest -q` passes with no env vars set.
+## M15-06 — UI: show safety adjustments cleanly (≤ 5 summary + details expander)
+### Description
+Even with fail-open, users must understand what got adjusted.
+
+### Implementation
+- In Streamlit:
+  - Banner when clamps/normalizations occurred: “Applied with safety adjustments”.
+  - Show ≤ 5 bullet warnings.
+  - “Show details” expander with the full clamp/normalize log.
+- Ensure chart overlay uses **post-normalization, post-validation** params.
+
+### Definition of Done
+- When a clamp happens:
+  - user sees short summary,
+  - can expand for details,
+  - chart uses corrected values.
+
+### QA
+- Force a normalization case (e.g., `cost_target_pct=10`) and verify banner + chart correctness.
 
 ---
 
-## Milestone Exit Criteria (M-EVAL)
-- One command runs evals (dry-run at minimum) and outputs `eval_summary.md` + `eval_summary.csv`.
-- Scores are 0–3 with clear reasons and flags.
-- The process highlights **actionable** improvement areas (prompt vs validation vs apply logic).
-- Offline/fixture mode exists for repeatability.
+## M15-07 — Eval-based regression harness for stability (N-runs per prompt)
+### Description
+Use your eval CSV to detect regressions and measure stability, not only correctness.
+
+### Implementation
+- Add script `evals/run_evals.py`:
+  - loads `eval_questions_answers.csv`,
+  - runs N times per question (default N=3),
+  - stores: suggested_driver, key params, ten_year_multiplier_estimate, warning summary count, hard_fail flag
+  - writes `evals/results.jsonl`.
+
+### Definition of Done
+- Can run: `python -m evals.run_evals --n 3`
+- Produces results file with per-run metrics.
+
+### QA
+- Sanity check: no crashes; hard failures ≤ 2%.
+- Spot check: for repeated runs, driver stable for most prompts.
 
 ---
 
-## Notes / Guardrails for LLM-as-judge
-- Keep judge deterministic by:
-  - temperature low (e.g., 0–0.2)
-  - strict JSON output
-  - rubric included
-- Judge must not “invent” missing facts; it should only compare:
-  - question
-  - expected content
-  - candidate output
-  - computed outcomes summary
+## Release Gate (acceptance criteria)
+A build is acceptable when:
+1) **Schema compliance:** 100% outputs validate against schema (no extra keys, valid JSON).
+2) **Fail-open:** ≥ 98% of prompts produce an applied scenario (hard errors only on invariants).
+3) **Stability:** For 10 key prompts run 10 times:
+   - ≥ 8/10 identical `suggested_driver`
+   - `ten_year_multiplier_estimate` range ≤ 0.3 (tunable threshold)
+4) **Warnings UX:** summary ≤ 5 bullets, with details available.
+5) **No extreme explosions:** 10-year multiplier stays within [0.2x, 3.0x] after clamps.
 

@@ -20,6 +20,7 @@ from narrative.scenario_assistant import suggest_scenario
 from llm.provider import LLMError
 from llm.scenario_assistant_v3 import request_suggestion
 from llm.validate_suggestion import SuggestionValidationError
+from llm.validation_result import summarize_warnings
 from model.cost_driver import calibrate_alpha_beta
 from pipeline.cache import CacheError, load_cache, load_cache_meta_raw
 from pipeline.run_all import run_all
@@ -807,6 +808,7 @@ def _render_app() -> None:
                 st.session_state["scenario_ctx_t0"] = ctx.t0_cost_used
                 st.session_state["scenario_label_current"] = st.session_state["assistant_v3_label"]
                 st.session_state["scenario_warnings_current"] = []
+                st.session_state["scenario_warnings_details_current"] = []
                 st.success(f"Applied {label}. Overlay updated.")
                 st.rerun()
         # Scenario summary card removed per request
@@ -818,10 +820,17 @@ def _render_app() -> None:
     ctx_beta_cur = st.session_state.get("scenario_ctx_beta", beta_default)
     ctx_t0_cur = st.session_state.get("scenario_ctx_t0", DEFAULT_ASSUMPTIONS.t0_cost)
     scenario_warnings = st.session_state.get("scenario_warnings_current", [])
+    scenario_warning_details = st.session_state.get("scenario_warnings_details_current", [])
     if current_params:
         with st.expander("Scenario parameters", expanded=False):
             if scenario_warnings:
-                st.warning("Warnings: " + " | ".join(scenario_warnings))
+                st.warning("Applied with safety adjustments.")
+                for item in scenario_warnings[:5]:
+                    st.markdown(f"- {item}")
+                if scenario_warning_details:
+                    with st.expander("Show details", expanded=False):
+                        for item in scenario_warning_details:
+                            st.markdown(f"- {item}")
             st.markdown(
                 f"**Cost base used:** {ctx_t0_cur:,.0f} EUR | **Alpha (fixed):** {ctx_alpha_cur:,.0f} | **Beta (per FTE):** {ctx_beta_cur:,.0f}<br>"
                 "Implied FTE = max(0, (cost - alpha) / beta)",
@@ -944,16 +953,23 @@ def _render_app() -> None:
                         st.session_state["scenario_ctx_beta"] = ctx_beta_cur
                         st.session_state["scenario_ctx_t0"] = ctx_t0_cur
                         ctx_obj = SimpleNamespace(alpha=ctx_alpha_cur, beta=ctx_beta_cur, t0_cost_used=ctx_t0_cur, warning=None)
-                        _, _, val_res = validate_and_sanitize_result(updated.__dict__, ctx=ValidateContext(horizon_months=len(forecast)))
+                        validated_params, _summary_warns, val_res = validate_and_sanitize_result(
+                            updated.__dict__,
+                            ctx=ValidateContext(horizon_months=len(forecast)),
+                        )
                         if val_res.errors:
                             for issue in val_res.errors:
                                 st.error(issue.message)
                             raise Exception("Validation errors present")
-                        warning_msgs = [w.message for w in getattr(val_res, "warnings", [])] + [c.message for c in getattr(val_res, "clamps", [])]
-                        st.session_state["scenario_warnings_current"] = warning_msgs
+                        warning_msgs = [w.message for w in getattr(val_res, "warnings", [])]
+                        clamp_msgs = [c.message for c in getattr(val_res, "clamps", [])]
+                        summary_msgs, detail_msgs = summarize_warnings(warning_msgs, clamp_msgs, [])
+                        st.session_state["scenario_warnings_current"] = summary_msgs
+                        st.session_state["scenario_warnings_details_current"] = detail_msgs
+                        st.session_state["scenario_params_current"] = validated_params
                         scenario_df = apply_driver_scenario(
                             forecast_cost_df=forecast[["date", "yhat"]],
-                            params=updated,
+                            params=validated_params,
                             driver=current_driver or "cost",
                             ctx=ctx_obj,
                             scenario_name="scenario_custom",
@@ -1010,20 +1026,21 @@ def _render_app() -> None:
                             st.error(issue.message)
                         clear_pending_v3()
                         return
-                    validation_warnings = validation_warnings + [w.message for w in getattr(val_result, "warnings", [])]
+                    warning_msgs = validation_warnings + [w.message for w in getattr(val_result, "warnings", [])]
                     clamp_msgs = [c.message for c in getattr(val_result, "clamps", [])]
-                    validation_warnings.extend(clamp_msgs)
+                    summary_msgs, detail_msgs = summarize_warnings(warning_msgs, clamp_msgs, [])
                     st.session_state["assistant_v3_suggested_driver"] = driver_used
                     set_pending_v3(
                         params=params_v3,
                         driver_choice=driver_used,
                         ctx=ctx,
                         rationale=suggestion.get("rationale", {}) or {},
-                        warnings=validation_warnings,
+                        warnings=summary_msgs,
                         safety=suggestion.get("safety"),
                         raw_suggestion=suggestion,
                         label=f"AI Assistant (V3) [{driver_used}]",
                         derived=derived,
+                        warning_details=detail_msgs,
                     )
                     st.success(f"Suggestion ready with driver: {driver_used}. Review below and click Apply to overlay.")
 
@@ -1033,11 +1050,18 @@ def _render_app() -> None:
         rationale = pending_v3.get("rationale", {})
         safety = pending_v3.get("safety", {}) or {}
         warnings = pending_v3.get("warnings", [])
+        warning_details = pending_v3.get("warning_details", [])
 
         if ctx.warning:
             st.info(ctx.warning)
         if warnings:
-            st.info("Adjusted to safe bounds: " + " | ".join(warnings))
+            st.warning("Applied with safety adjustments.")
+            for item in warnings[:5]:
+                st.markdown(f"- {item}")
+            if warning_details:
+                with st.expander("Safety details", expanded=False):
+                    for item in warning_details:
+                        st.markdown(f"- {item}")
         safety_warnings = safety.get("warnings") or []
         if safety_warnings:
             st.info("LLM safety: " + " | ".join(safety_warnings))
@@ -1136,6 +1160,7 @@ def _render_app() -> None:
             st.session_state["scenario_ctx_t0"] = ctx_t0_cur
             st.session_state["scenario_label_current"] = st.session_state["assistant_v3_label"]
             st.session_state["scenario_warnings_current"] = pending_v3.get("warnings", [])
+            st.session_state["scenario_warnings_details_current"] = pending_v3.get("warning_details", [])
             st.session_state["scenario_driver_rationale_current"] = derived.get("driver_rationale")
             st.success("Applied V3 suggestion. Overlay updated.")
             st.rerun()
