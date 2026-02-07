@@ -60,6 +60,7 @@ Guidance for mapping text to params:
 - If user asks for cost reduction target (e.g., “cut 10%”), set driver="cost_target" and cost_target_pct negative; compute implied FTE cut via fixed/variable mix.
 - Fixed/variable mapping: cost_target_pct → fte_delta_pct = cost_target_pct / (1 - fixed_share). With fixed_share=20%, a -10% cost target implies ~-12.5% FTE. Never equate cost% to FTE% unless fixed_share is 0.
 - FTE-led asks: if the user specifies an FTE change (e.g., “reduce workforce by 10%”), keep driver="fte" and infer cost delta ≈ fte_delta_pct * (1 - fixed_share). With fixed_share=20%, -10% FTE → ~-8% cost. Do NOT invert this rule.
+- Reduced-hours / 4-day-week asks: if user asks for required backfill to maintain output, use driver="fte" with a positive fte_delta_pct (headcount increase). Do not encode this as a negative level impact.
 - Contractor conversion: beta_multiplier slightly below 1 (e.g., 0.97) with modest negative impact_magnitude; keep parallel slope (no huge growth deltas).
 - Inflation shock: beta_multiplier slightly above 1 (e.g., 1.05) with near-zero impact_magnitude; keep growth deltas near baseline.
 - Hiring freeze: driver="fte", onset_duration_months ~3-6, fte_delta_pct ~0 (stop growth) and small negative growth deltas if needed.

@@ -46,3 +46,38 @@ def test_driver_resolution_with_fixture():
     assert isinstance(warnings, list)
     assert isinstance(derived, dict)
     assert hasattr(val_result, "errors")
+
+
+def test_driver_resolution_backfill_phrase_keeps_positive_fte_direction():
+    suggestion = {
+        "scenario_driver": "auto",
+        "suggested_driver": "fte",
+        "params": {
+            "driver": "fte",
+            "lag_months": 6,
+            "onset_duration_months": 3,
+            "event_duration_months": 12,
+            "recovery_duration_months": 3,
+            "shape": "linear",
+            "impact_mode": "level",
+            "impact_magnitude": -0.2,
+            "fte_delta_pct": -0.2,
+            "growth_delta_pp_per_year": 0.0,
+            "drift_pp_per_year": 0.0,
+        },
+    }
+    ctx = build_driver_context(observed_t0_cost=10_000_000)
+    user_text = "What happens if we introduce a 4-day workweek (reduced hours) in one region—what FTE backfill is required?"
+    driver_used, params, warnings, derived, val_result = resolve_driver_and_params(
+        suggestion,
+        ctx,
+        override_driver="auto",
+        horizon_months=120,
+        user_text=user_text,
+    )
+    assert driver_used == "fte"
+    assert params.fte_delta_pct is not None and params.fte_delta_pct > 0
+    assert params.impact_magnitude == 0.0
+    assert isinstance(warnings, list)
+    assert isinstance(derived, dict)
+    assert hasattr(val_result, "errors")

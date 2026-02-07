@@ -134,7 +134,11 @@ def apply_scenario_v3_simple(
         fte_series = adjusted
 
     costs = cost_from_fte(alpha, beta_eff.iloc[:horizon], fte_series.iloc[:horizon])
-    if params.impact_mode == "level" and params.impact_magnitude:
+    apply_level_impact = not (
+        params.driver == "fte"
+        and (params.fte_delta_pct is not None or params.fte_delta_abs is not None)
+    )
+    if apply_level_impact and params.impact_mode == "level" and params.impact_magnitude:
         factors = [1.0] * horizon
         start = min(max(params.lag_months, 0), horizon - 1)
         onset = max(params.onset_duration_months or 0, 0)

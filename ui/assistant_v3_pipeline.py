@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
@@ -58,6 +59,36 @@ def _implied_fte_series(cost_series: pd.Series, ctx: DriverContext) -> pd.Series
     return cost_series.apply(lambda c: fte_from_cost(c, ctx.alpha, ctx.beta))
 
 
+def _infer_fte_direction(user_text: str | None) -> int:
+    text = (user_text or "").lower()
+    if not text:
+        return 0
+    positive_patterns = (
+        r"\bbackfill\b",
+        r"\breduced hours\b",
+        r"\b4[- ]day workweek\b",
+        r"\bfour[- ]day workweek\b",
+        r"\badditional fte\b",
+        r"\bincrease (?:fte|headcount|staff|workforce)\b",
+        r"\badd (?:fte|headcount|staff)\b",
+    )
+    negative_patterns = (
+        r"\breduce (?:fte|headcount|staff|workforce)\b",
+        r"\bcut (?:fte|headcount|staff|workforce)\b",
+        r"\blower (?:fte|headcount|staff|workforce)\b",
+        r"\bdecrease (?:fte|headcount|staff|workforce)\b",
+        r"\btrim (?:fte|headcount|staff|workforce)\b",
+        r"\blayoff",
+    )
+    positive = any(re.search(p, text) for p in positive_patterns)
+    negative = any(re.search(p, text) for p in negative_patterns)
+    if positive and not negative:
+        return 1
+    if negative and not positive:
+        return -1
+    return 0
+
+
 def apply_driver_scenario(
     forecast_cost_df: pd.DataFrame,
     params: ScenarioParamsV3,
@@ -108,9 +139,26 @@ def resolve_driver_and_params(
     raw_params = suggestion.get("params", {})
     params_v3, warnings, val_result = validate_and_sanitize_result(raw_params, ctx=ValidateContext(horizon_months=horizon_months))
 
-    # If driver is FTE but only a level impact is provided (no explicit FTE deltas), convert impact to an FTE delta
-    if driver_used == "fte" and params_v3.impact_mode == "level" and params_v3.impact_magnitude and not params_v3.fte_delta_pct and not params_v3.fte_delta_abs:
-        params_v3 = params_v3.__class__(**{**params_v3.__dict__, "fte_delta_pct": params_v3.impact_magnitude, "impact_magnitude": 0.0})
+    # For FTE driver, avoid mixing explicit FTE deltas with level impact (double-count on cost path).
+    if (
+        driver_used == "fte"
+        and params_v3.impact_mode == "level"
+        and params_v3.impact_magnitude
+        and (params_v3.fte_delta_pct is not None or params_v3.fte_delta_abs is not None)
+    ):
+        params_v3 = params_v3.__class__(**{**params_v3.__dict__, "impact_magnitude": 0.0})
+        warnings.append("Ignored level impact for fte driver because explicit FTE delta was provided.")
+    # If driver is FTE but only a level impact is provided (no explicit FTE deltas), convert impact to an FTE delta.
+    if (
+        driver_used == "fte"
+        and params_v3.impact_mode == "level"
+        and params_v3.impact_magnitude
+        and params_v3.fte_delta_pct is None
+        and params_v3.fte_delta_abs is None
+    ):
+        params_v3 = params_v3.__class__(
+            **{**params_v3.__dict__, "fte_delta_pct": params_v3.impact_magnitude, "impact_magnitude": 0.0}
+        )
         warnings.append("Interpreted level impact as FTE delta for fte driver to avoid double-counting alpha.")
     # If driver is cost_target and params missing cost_target_pct, pull from suggestion.cost_target.target_pct if present
     if driver_used == "cost_target" and (params_v3.cost_target_pct is None or params_v3.cost_target_pct == 0):
@@ -151,6 +199,24 @@ def resolve_driver_and_params(
             warnings.append(
                 f"Translated cost target {target_cost_pct:+.1%} into FTE change {fte_pct_needed:+.1%} using variable share ≈ {variable_share:.2f}."
             )
+
+    # Directional intent guardrail for FTE asks (e.g. backfill/reduced-hours should not come back as a cut).
+    if driver_used == "fte":
+        expected_dir = _infer_fte_direction(user_text)
+        if expected_dir > 0:
+            if params_v3.fte_delta_pct is not None and params_v3.fte_delta_pct < 0:
+                params_v3 = params_v3.__class__(**{**params_v3.__dict__, "fte_delta_pct": abs(params_v3.fte_delta_pct)})
+                warnings.append("Adjusted FTE delta sign to positive based on backfill/increase intent.")
+            if params_v3.fte_delta_abs is not None and params_v3.fte_delta_abs < 0:
+                params_v3 = params_v3.__class__(**{**params_v3.__dict__, "fte_delta_abs": abs(params_v3.fte_delta_abs)})
+                warnings.append("Adjusted FTE absolute change sign to positive based on backfill/increase intent.")
+        elif expected_dir < 0:
+            if params_v3.fte_delta_pct is not None and params_v3.fte_delta_pct > 0:
+                params_v3 = params_v3.__class__(**{**params_v3.__dict__, "fte_delta_pct": -abs(params_v3.fte_delta_pct)})
+                warnings.append("Adjusted FTE delta sign to negative based on reduction intent.")
+            if params_v3.fte_delta_abs is not None and params_v3.fte_delta_abs > 0:
+                params_v3 = params_v3.__class__(**{**params_v3.__dict__, "fte_delta_abs": -abs(params_v3.fte_delta_abs)})
+                warnings.append("Adjusted FTE absolute change sign to negative based on reduction intent.")
 
     baseline_fte = fte_from_cost(ctx.t0_cost_used, ctx.alpha, ctx.beta)
     derived: Dict[str, float] = {"baseline_fte": baseline_fte, "alpha": ctx.alpha, "beta": ctx.beta}

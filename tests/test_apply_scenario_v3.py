@@ -78,3 +78,20 @@ def test_lag_applies_at_t6():
     result = apply_scenario_v3_simple(baseline, params, ctx)
     assert result["yhat"].iloc[5] == pytest.approx(10_000_000.0)
     assert result["yhat"].iloc[6] > result["yhat"].iloc[5]
+
+
+def test_fte_driver_ignores_level_impact_when_fte_delta_present():
+    alpha, beta = calibrate_alpha_beta(10_000_000, 800, 0.2)
+    ctx = type("Ctx", (), {"alpha": alpha, "beta0": beta})
+    baseline = _baseline([10_000_000.0] * 6)
+    params = ScenarioParamsV3(
+        driver="fte",
+        lag_months=0,
+        onset_duration_months=0,
+        impact_mode="level",
+        impact_magnitude=-0.2,
+        fte_delta_pct=-0.2,
+    )
+    result = apply_scenario_v3_simple(baseline, params, ctx)
+    # Cost should reflect only the FTE cut (alpha stays fixed), not an extra level-impact cut.
+    assert result["yhat"].iloc[0] == pytest.approx(8_400_000.0, rel=1e-6)
