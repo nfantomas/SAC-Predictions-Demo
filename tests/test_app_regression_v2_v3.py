@@ -81,3 +81,68 @@ def test_driver_resolution_backfill_phrase_keeps_positive_fte_direction():
     assert isinstance(warnings, list)
     assert isinstance(derived, dict)
     assert hasattr(val_result, "errors")
+
+
+def test_driver_resolution_keep_cost_flat_prefers_cost_target():
+    suggestion = {
+        "scenario_driver": "auto",
+        "suggested_driver": "cost",
+        "params": {
+            "driver": "cost",
+            "lag_months": 0,
+            "onset_duration_months": 6,
+            "event_duration_months": None,
+            "recovery_duration_months": None,
+            "shape": "linear",
+            "impact_mode": "growth",
+            "impact_magnitude": 0.0,
+            "growth_delta_pp_per_year": 0.0,
+            "drift_pp_per_year": 0.0,
+            "cost_target_pct": None,
+        },
+    }
+    ctx = build_driver_context(observed_t0_cost=10_000_000)
+    user_text = "what will happen with FTEs if we want to keep costs at current level"
+    driver_used, params, warnings, derived, val_result = resolve_driver_and_params(
+        suggestion,
+        ctx,
+        override_driver="auto",
+        horizon_months=120,
+        user_text=user_text,
+    )
+    assert driver_used == "cost_target"
+    assert params.cost_target_pct == 0.0
+    assert isinstance(warnings, list)
+
+
+def test_driver_resolution_explicit_fte_change_stays_fte():
+    suggestion = {
+        "scenario_driver": "auto",
+        "suggested_driver": "cost_target",
+        "params": {
+            "driver": "cost_target",
+            "lag_months": 0,
+            "onset_duration_months": 0,
+            "event_duration_months": None,
+            "recovery_duration_months": None,
+            "shape": "step",
+            "impact_mode": "level",
+            "impact_magnitude": 0.0,
+            "growth_delta_pp_per_year": 0.0,
+            "drift_pp_per_year": 0.0,
+            "cost_target_pct": -0.1,
+            "fte_delta_pct": None,
+        },
+    }
+    ctx = build_driver_context(observed_t0_cost=10_000_000)
+    user_text = "What will happen to costs if we reduce our workforce by 10%?"
+    driver_used, params, warnings, derived, val_result = resolve_driver_and_params(
+        suggestion,
+        ctx,
+        override_driver="auto",
+        horizon_months=120,
+        user_text=user_text,
+    )
+    assert driver_used == "fte"
+    assert params.fte_delta_pct == -0.1
+    assert params.cost_target_pct is None

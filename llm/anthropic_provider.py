@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import time
 from typing import Any, Dict, List, Optional
 from urllib import error, request
@@ -80,6 +81,31 @@ def _request_payload(system_prompt: str, user_prompt: str, model: str, max_token
     return payload
 
 
+def _classify_url_error(exc: error.URLError) -> str:
+    reason = getattr(exc, "reason", exc)
+    if isinstance(reason, socket.gaierror):
+        return "llm_dns_error"
+    if isinstance(reason, (socket.timeout, TimeoutError)):
+        return "llm_timeout"
+
+    msg = str(reason).lower()
+    if "nodename nor servname" in msg or "name or service not known" in msg:
+        return "llm_dns_error"
+    if "temporary failure in name resolution" in msg:
+        return "llm_dns_error"
+    if "timed out" in msg:
+        return "llm_timeout"
+    if "connection refused" in msg:
+        return "llm_connection_refused"
+    if "certificate verify failed" in msg or "ssl" in msg:
+        return "llm_ssl_error"
+    return "llm_network_error"
+
+
+def _is_retryable_network_reason(reason: str) -> bool:
+    return reason in ("llm_timeout", "llm_network_error", "llm_dns_error")
+
+
 def list_models() -> List[str]:
     api_key = _resolve_api_key()
     if not api_key:
@@ -97,18 +123,28 @@ def list_models() -> List[str]:
     if beta:
         headers["anthropic-beta"] = beta
 
-    try:
-        req = request.Request(url, headers=headers, method="GET")
-        with request.urlopen(req, timeout=timeout) as resp:
-            body = resp.read().decode("utf-8")
-            parsed = json.loads(body)
-    except error.HTTPError as exc:
-        status = exc.code
-        if status == 401:
-            raise LLMError("llm_http_401_invalid_key") from exc
-        raise LLMError(f"llm_http_{status}") from exc
-    except error.URLError as exc:
-        raise LLMError("llm_timeout") from exc
+    max_retries = int(os.getenv("LLM_MAX_RETRIES", "3"))
+    for attempt in range(max_retries + 1):
+        try:
+            req = request.Request(url, headers=headers, method="GET")
+            with request.urlopen(req, timeout=timeout) as resp:
+                body = resp.read().decode("utf-8")
+                parsed = json.loads(body)
+            break
+        except error.HTTPError as exc:
+            status = exc.code
+            if status in (429, 500, 502, 503, 504) and attempt < max_retries:
+                time.sleep(1.0 * (attempt + 1))
+                continue
+            if status == 401:
+                raise LLMError("llm_http_401_invalid_key") from exc
+            raise LLMError(f"llm_http_{status}") from exc
+        except error.URLError as exc:
+            reason = _classify_url_error(exc)
+            if _is_retryable_network_reason(reason) and attempt < max_retries:
+                time.sleep(1.0 * (attempt + 1))
+                continue
+            raise LLMError(reason) from exc
 
     models = []
     for entry in parsed.get("data", []):
@@ -165,10 +201,11 @@ def generate_json(system_prompt: str, user_prompt: str, schema_hint: Optional[Di
                 raise LLMError("llm_http_401_invalid_key") from exc
             raise LLMError(f"llm_http_{status}") from exc
         except error.URLError as exc:
-            if attempt < max_retries:
+            reason = _classify_url_error(exc)
+            if _is_retryable_network_reason(reason) and attempt < max_retries:
                 time.sleep(1.0 * (attempt + 1))
                 continue
-            raise LLMError("llm_timeout") from exc
+            raise LLMError(reason) from exc
 
         content = parsed.get("content") or []
         text = ""

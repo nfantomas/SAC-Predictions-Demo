@@ -51,9 +51,9 @@ Required output schema (strict, no extra keys):
 
 Guidance for mapping text to params:
 - Time anchoring: t0 = first forecast month after last actual; lag_months is the start offset. “mid next year” → lag_months = 6 by default. If timing is unclear, default to lag_months = 6 (do NOT start at t0).
-- Driver selection: use scenario_driver="auto" and also fill suggested_driver. Use cost when user talks about cost levels/targets; use cost_target when explicit percentage target; use fte when headcount change is explicit.
+- Driver selection: use scenario_driver="auto" and also fill suggested_driver. Use cost for qualitative cost-shape asks; use cost_target for explicit targets/constraints (including "keep costs flat/current level"); use fte when headcount change is explicit.
 - Translation table:
-  - “keep costs flat” → cost driver; set long-term growth to ~0% (beta still inflates ~3%/yr), lag if timing is mentioned.
+  - “keep costs flat” / “keep costs at current level” → cost_target driver; set cost_target_pct = 0.0 and explain implied FTE path under inflation + fixed share.
   - “reduce costs by X%” → cost_target driver; set cost_target_pct negative; estimate implied FTE cut via fixed/variable mix.
   - “cut FTE by X%” → fte driver; cost responds via alpha+beta*FTE; include fte_delta_pct.
   - macro/geopolitical shock → level reset + temporary growth delta + optional recovery; allow larger short-term movement but keep within bounds.
