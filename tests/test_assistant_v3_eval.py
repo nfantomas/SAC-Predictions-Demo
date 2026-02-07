@@ -5,6 +5,7 @@ import pytest
 
 from evals.assistant_v3_eval import (
     EvalResult,
+    _canonical_predicted_driver,
     build_scorecard,
     load_eval_cases,
     run_eval_case,
@@ -234,3 +235,14 @@ def test_scorecard_markdown_shows_na_benchmark_latency_when_missing():
     md = scorecard_to_markdown(current, benchmark_scorecard=benchmark)
     assert "Average latency (ms): 1234.5 / N/A" in md
     assert "Latency (ms): `1234 / N/A`" in md
+
+
+def test_canonical_predicted_driver_maps_mix_shift_proxy():
+    params = type("P", (), {"beta_multiplier": 0.95, "fte_delta_pct": None, "fte_delta_abs": None})()
+    canonical = _canonical_predicted_driver(
+        expected_driver="mix_shift",
+        predicted_driver="cost",
+        params=params,  # type: ignore[arg-type]
+        question="relocate 200 FTE to a lower-cost country over 3 years",
+    )
+    assert canonical == "mix_shift"

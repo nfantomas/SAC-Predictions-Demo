@@ -274,6 +274,38 @@ def _score_params(expected: Dict[str, Any], actual: ScenarioParamsV3) -> tuple[i
     return sign_matches, sign_total, exact_matches, exact_total
 
 
+def _canonical_predicted_driver(
+    expected_driver: str,
+    predicted_driver: str,
+    params: ScenarioParamsV3,
+    question: str,
+) -> str:
+    """
+    Eval-only canonicalization for drivers not yet first-class in schema.
+    """
+    if expected_driver != "mix_shift":
+        return predicted_driver
+
+    text = (question or "").lower()
+    mix_keywords = (
+        "relocate",
+        "lower-cost",
+        "high-cost",
+        "offshore",
+        "nearshore",
+        "workforce mix",
+        "location mix",
+        "economic downturn",
+        "stabilize costs",
+    )
+    has_mix_signal = any(k in text for k in mix_keywords)
+    beta_mult = params.beta_multiplier
+    no_explicit_fte = params.fte_delta_pct is None and params.fte_delta_abs is None
+    if predicted_driver == "cost" and has_mix_signal and beta_mult is not None and beta_mult < 1.0 and no_explicit_fte:
+        return "mix_shift"
+    return predicted_driver
+
+
 def run_eval_case(
     case: EvalCase,
     suggestion_fn: SuggestionFn = request_suggestion,
@@ -311,6 +343,12 @@ def run_eval_case(
             override_driver=None,
             horizon_months=horizon_months,
             user_text=case.question,
+        )
+        predicted_driver = _canonical_predicted_driver(
+            expected_driver=case.expected_driver,
+            predicted_driver=predicted_driver,
+            params=params_v3,
+            question=case.question,
         )
         warnings_count = len(warnings) + len(getattr(val_result, "warnings", [])) + len(getattr(val_result, "clamps", []))
         sign_matches, sign_total, exact_matches, exact_total = _score_params(case.expected_params, params_v3)

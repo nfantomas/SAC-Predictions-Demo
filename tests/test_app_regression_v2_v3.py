@@ -146,3 +146,115 @@ def test_driver_resolution_explicit_fte_change_stays_fte():
     assert driver_used == "fte"
     assert params.fte_delta_pct == -0.1
     assert params.cost_target_pct is None
+
+
+def test_driver_resolution_aging_population_prefers_fte():
+    suggestion = {
+        "scenario_driver": "auto",
+        "suggested_driver": "cost",
+        "params": {
+            "driver": "cost",
+            "lag_months": 6,
+            "onset_duration_months": 12,
+            "shape": "linear",
+            "impact_mode": "growth",
+            "impact_magnitude": 0.0,
+            "growth_delta_pp_per_year": 0.01,
+            "drift_pp_per_year": 0.0,
+        },
+    }
+    ctx = build_driver_context(observed_t0_cost=10_000_000)
+    driver_used, params, warnings, _derived, _val_result = resolve_driver_and_params(
+        suggestion,
+        ctx,
+        override_driver="auto",
+        horizon_months=120,
+        user_text="pressure from aging population and retirement pressure",
+    )
+    assert driver_used == "fte"
+
+
+def test_driver_resolution_union_wage_hours_prefers_cost():
+    suggestion = {
+        "scenario_driver": "auto",
+        "suggested_driver": "fte",
+        "params": {
+            "driver": "fte",
+            "lag_months": 3,
+            "onset_duration_months": 9,
+            "shape": "linear",
+            "impact_mode": "level",
+            "impact_magnitude": 0.07,
+            "fte_delta_pct": 0.05,
+            "growth_delta_pp_per_year": 0.0,
+            "drift_pp_per_year": 0.0,
+        },
+    }
+    ctx = build_driver_context(observed_t0_cost=10_000_000)
+    driver_used, params, warnings, _derived, _val_result = resolve_driver_and_params(
+        suggestion,
+        ctx,
+        override_driver="auto",
+        horizon_months=120,
+        user_text="If union negotiations result in +7% wage increase plus reduced working hours, what is the combined impact?",
+    )
+    assert driver_used == "cost"
+
+
+def test_driver_resolution_relocation_prefers_mix_shift_proxy():
+    suggestion = {
+        "scenario_driver": "auto",
+        "suggested_driver": "fte",
+        "params": {
+            "driver": "fte",
+            "lag_months": 0,
+            "onset_duration_months": 0,
+            "shape": "linear",
+            "impact_mode": "level",
+            "impact_magnitude": -0.02,
+            "fte_delta_abs": -200,
+            "growth_delta_pp_per_year": 0.0,
+            "drift_pp_per_year": 0.0,
+        },
+    }
+    ctx = build_driver_context(observed_t0_cost=10_000_000)
+    driver_used, params, warnings, _derived, _val_result = resolve_driver_and_params(
+        suggestion,
+        ctx,
+        override_driver="auto",
+        horizon_months=120,
+        user_text="What happens if we relocate 200 FTE from a high-cost country to a lower-cost country over 3 years?",
+    )
+    assert driver_used == "cost"
+    assert params.beta_multiplier is not None and params.beta_multiplier < 1.0
+    assert params.fte_delta_pct is None
+    assert params.fte_delta_abs is None
+
+
+def test_driver_resolution_downturn_stabilize_prefers_mix_shift_proxy():
+    suggestion = {
+        "scenario_driver": "auto",
+        "suggested_driver": "fte",
+        "params": {
+            "driver": "fte",
+            "lag_months": 0,
+            "onset_duration_months": 0,
+            "shape": "linear",
+            "impact_mode": "level",
+            "impact_magnitude": -0.05,
+            "fte_delta_pct": -0.08,
+            "growth_delta_pp_per_year": 0.0,
+            "drift_pp_per_year": 0.0,
+        },
+    }
+    ctx = build_driver_context(observed_t0_cost=10_000_000)
+    driver_used, params, warnings, _derived, _val_result = resolve_driver_and_params(
+        suggestion,
+        ctx,
+        override_driver="auto",
+        horizon_months=120,
+        user_text="If we simulate an economic downturn (revenue -10%, hiring slowdown, higher attrition), what is the recommended workforce plan to stabilize costs?",
+    )
+    assert driver_used == "cost"
+    assert params.beta_multiplier is not None and params.beta_multiplier < 1.0
+    assert params.fte_delta_pct is None

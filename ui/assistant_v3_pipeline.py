@@ -115,6 +115,66 @@ def _has_explicit_fte_change_request(user_text: str | None) -> bool:
     return any(re.search(p, text) for p in patterns)
 
 
+def _is_aging_population_intent(user_text: str | None) -> bool:
+    text = (user_text or "").lower()
+    if not text:
+        return False
+    patterns = (
+        r"\baging population\b",
+        r"\baging workforce\b",
+        r"\bretirement eligibility\b",
+        r"\bretirement spike\b",
+        r"\blabor scarcity\b",
+    )
+    return any(re.search(p, text) for p in patterns)
+
+
+def _is_union_wage_hours_combined_intent(user_text: str | None) -> bool:
+    text = (user_text or "").lower()
+    if not text:
+        return False
+    has_union_or_wage = bool(
+        re.search(r"\bunion\b", text)
+        or re.search(r"\bwage(?:s)?\b", text)
+        or re.search(r"\bsalary\b", text)
+    )
+    has_hours_or_capacity = bool(
+        re.search(r"\breduced hours\b", text)
+        or re.search(r"\bworking hours\b", text)
+        or re.search(r"\bworkweek\b", text)
+        or re.search(r"\bcapacity\b", text)
+    )
+    return has_union_or_wage and has_hours_or_capacity
+
+
+def _is_mix_shift_intent(user_text: str | None) -> bool:
+    text = (user_text or "").lower()
+    if not text:
+        return False
+    patterns = (
+        r"\brelocat(e|ion)\b",
+        r"\blower[- ]cost countr(y|ies)\b",
+        r"\bhigh[- ]cost countr(y|ies)\b",
+        r"\bnearshore|offshore|offshoring\b",
+        r"\bmix shift\b",
+        r"\bworkforce mix\b",
+        r"\blocation mix\b",
+        r"\bcost geography\b",
+        r"\bredeploy(ment)?\b",
+    )
+    return any(re.search(p, text) for p in patterns)
+
+
+def _is_downturn_stabilize_intent(user_text: str | None) -> bool:
+    text = (user_text or "").lower()
+    if not text:
+        return False
+    has_downturn = bool(re.search(r"\beconomic downturn\b|\brevenue\s*-\s*\d+", text))
+    has_workforce_plan = bool(re.search(r"\bhiring slowdown\b|\bhigher attrition\b|\bworkforce plan\b", text))
+    has_stabilize_cost = bool(re.search(r"\bstabiliz(e|ing)\s+costs?\b", text))
+    return has_downturn and has_workforce_plan and has_stabilize_cost
+
+
 def apply_driver_scenario(
     forecast_cost_df: pd.DataFrame,
     params: ScenarioParamsV3,
@@ -153,6 +213,10 @@ def resolve_driver_and_params(
     user_text_norm = (user_text or "").strip()
     flat_cost_intent = _is_flat_cost_intent(user_text_norm)
     explicit_fte_change = _has_explicit_fte_change_request(user_text_norm)
+    aging_intent = _is_aging_population_intent(user_text_norm)
+    union_hours_intent = _is_union_wage_hours_combined_intent(user_text_norm)
+    mix_shift_intent = _is_mix_shift_intent(user_text_norm)
+    downturn_stabilize_intent = _is_downturn_stabilize_intent(user_text_norm)
     scenario_driver = (suggestion.get("scenario_driver") or "auto").lower()
     driver_inferred = (suggestion.get("driver") or suggestion.get("suggested_driver") or "").lower()
     if scenario_driver == "auto":
@@ -168,6 +232,15 @@ def resolve_driver_and_params(
     # Keep-cost-flat questions should map to a cost_target constraint even when LLM returns cost.
     if flat_cost_intent and driver_used == "cost":
         driver_used = "cost_target"
+    # Aging / retirement pressure is primarily a workforce-capacity path.
+    if aging_intent and driver_used == "cost":
+        driver_used = "fte"
+    # Union+wage with reduced hours is a combined cost shock (wage + backfill), default to cost.
+    if union_hours_intent and driver_used == "fte" and not explicit_fte_change:
+        driver_used = "cost"
+    # Mix-shift/downturn stabilization scenarios should prefer cost path with beta/mix levers.
+    if (mix_shift_intent or downturn_stabilize_intent) and driver_used == "fte" and not explicit_fte_change:
+        driver_used = "cost"
 
     raw_params = suggestion.get("params", {})
     params_v3, warnings, val_result = validate_and_sanitize_result(raw_params, ctx=ValidateContext(horizon_months=horizon_months))
@@ -256,6 +329,30 @@ def resolve_driver_and_params(
             if params_v3.fte_delta_abs is not None and params_v3.fte_delta_abs > 0:
                 params_v3 = params_v3.__class__(**{**params_v3.__dict__, "fte_delta_abs": -abs(params_v3.fte_delta_abs)})
                 warnings.append("Adjusted FTE absolute change sign to negative based on reduction intent.")
+
+    # Mix-shift/downturn stabilization proxy: use beta levers instead of headcount when not explicitly FTE-driven.
+    if driver_used == "cost" and (mix_shift_intent or downturn_stabilize_intent):
+        updates = dict(params_v3.__dict__)
+        touched = False
+        if updates.get("fte_delta_pct") is not None:
+            updates["fte_delta_pct"] = None
+            touched = True
+        if updates.get("fte_delta_abs") is not None:
+            updates["fte_delta_abs"] = None
+            touched = True
+        beta_mult = updates.get("beta_multiplier")
+        if beta_mult is None:
+            updates["beta_multiplier"] = 0.95 if mix_shift_intent else 0.97
+            touched = True
+        if updates.get("onset_duration_months", 0) == 0:
+            updates["onset_duration_months"] = 12
+            touched = True
+        if updates.get("lag_months", 0) == 0:
+            updates["lag_months"] = 3
+            touched = True
+        if touched:
+            params_v3 = params_v3.__class__(**updates)
+            warnings.append("Applied mix-shift proxy: prioritized beta/location-mix levers over explicit FTE cuts.")
 
     baseline_fte = fte_from_cost(ctx.t0_cost_used, ctx.alpha, ctx.beta)
     derived: Dict[str, float] = {"baseline_fte": baseline_fte, "alpha": ctx.alpha, "beta": ctx.beta}
