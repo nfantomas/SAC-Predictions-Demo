@@ -19,6 +19,7 @@ from narrative.generator import summarize_series
 from narrative.scenario_assistant import suggest_scenario
 from llm.provider import LLMError
 from llm.scenario_assistant_v3 import request_suggestion
+from ui.ai_assistant_two_step import render_two_step_assistant
 from llm.validate_suggestion import SuggestionValidationError
 from model.cost_driver import calibrate_alpha_beta
 from pipeline.cache import CacheError, load_cache, load_cache_meta_raw
@@ -965,6 +966,8 @@ def _render_app() -> None:
                     except Exception as exc:
                         st.warning(f"Could not apply parameters: {exc}")
 
+    st.divider()
+    render_two_step_assistant(series_df, forecast, last_actual_value)
     st.divider()
     st.subheader("AI scenario assistant")
     st.caption("Uses new HR presets and driver model.")

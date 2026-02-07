@@ -5,7 +5,7 @@ description = "SAC Predictions Demo"
 authors = [{ name = "SAC Demo Team", email = "devnull@example.com" }]
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["pandas>=2.2.0", "statsmodels>=0.14.0", "streamlit>=1.38.0", "plotly>=5.22.0"]
+dependencies = ["pandas>=2.2.0", "statsmodels>=0.14.0", "streamlit>=1.38.0", "plotly>=5.22.0", "pydantic (>=2.6.4,<3.0.0)"]
 
 [tool.poetry]
 package-mode = false
@@ -14,6 +14,7 @@ package-mode = false
 python = ">=3.11,<4.0"
 pandas = ">=2.2.0"
 plotly = ">=5.22.0"
+pydantic = "^2.6.4"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"

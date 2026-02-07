@@ -8,10 +8,12 @@ import pandas as pd
 
 from config import BASELINE_INFLATION_PPY, DEFAULT_ASSUMPTIONS
 from config.core import VALIDATION_CAPS
+from config.validation_caps import caps_for_severity
 from llm.validate_suggestion import SuggestionValidationError
 from llm.validation_result import ValidationIssue, ValidationResult
 from scenarios.schema import ScenarioParamsV3
 from scenarios.v3 import DriverContext, apply_scenario_v3_simple
+from scenarios.normalize_params import normalize_params
 
 
 @dataclass(frozen=True)
@@ -23,6 +25,7 @@ class ValidateContext:
     horizon_months: int = 120
     multiplier_max: float = 3.0
     multiplier_min: float = 0.2
+    severity: str = "operational"
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -105,6 +108,7 @@ def validate_and_sanitize(params_raw: Dict[str, object], ctx: ValidateContext | 
 
 def validate_and_sanitize_result(params_raw: Dict[str, object], ctx: ValidateContext | None = None) -> Tuple[ScenarioParamsV3, List[str], ValidationResult]:
     ctx = ctx or ValidateContext()
+    caps = caps_for_severity(ctx.severity)
     warnings: List[str] = []
     errors: List[ValidationIssue] = []
     clamps: List[ValidationIssue] = []
@@ -113,6 +117,9 @@ def validate_and_sanitize_result(params_raw: Dict[str, object], ctx: ValidateCon
     except Exception as exc:
         errors.append(ValidationIssue(str(exc)))
         return ScenarioParamsV3(), warnings, ValidationResult(errors=errors, warnings=[], clamps=clamps)  # type: ignore[arg-type]
+
+    params, normalization_warnings = normalize_params(params)
+    warnings.extend(normalization_warnings)
 
     if params.lag_months < 0 or params.lag_months >= ctx.horizon_months:
         errors.append(ValidationIssue("lag_months out of range for forecast horizon."))
@@ -134,14 +141,14 @@ def validate_and_sanitize_result(params_raw: Dict[str, object], ctx: ValidateCon
     end_val = float(scenario["yhat"].iloc[-1])
     multiplier_raw = (end_val / start_val) if start_val else 1.0
     if multiplier_raw > ctx.multiplier_max or multiplier_raw < ctx.multiplier_min:
-        errors.append(ValidationIssue(f"Projection multiplier {multiplier_raw:.2f}x outside [{ctx.multiplier_min}x, {ctx.multiplier_max}x]."))
+        warnings.append(f"Projection multiplier {multiplier_raw:.2f}x outside [{ctx.multiplier_min}x, {ctx.multiplier_max}x].")
 
     # Alpha floor / non-negativity
     if (scenario["yhat"] < 0).any():
         errors.append(ValidationIssue("Scenario produces negative costs."))
     min_cost = float(scenario["yhat"].min())
     if min_cost < ctx.alpha:
-        warnings.append("Adjusted to enforce alpha cost floor.")
+        errors.append(ValidationIssue("Scenario cost drops below alpha fixed-cost floor."))
     # Implied FTE path
     fte_series = (scenario["yhat"] - ctx.alpha) / ctx.beta
     if fte_series.isnull().any() or not np.isfinite(fte_series).all():
@@ -157,19 +164,19 @@ def validate_and_sanitize_result(params_raw: Dict[str, object], ctx: ValidateCon
     start_fte = float(fte_series.iloc[0])
     end_fte = float(fte_series.iloc[-1])
     fte_cagr = ((end_fte / start_fte) ** (1 / years) - 1) if start_fte > 0 else 0.0
-    cost_cagr_min = VALIDATION_CAPS["cost_cagr_min"]
-    cost_cagr_max = VALIDATION_CAPS["cost_cagr_max"]
-    fte_cagr_min = VALIDATION_CAPS["fte_cagr_min"]
-    fte_cagr_max = VALIDATION_CAPS["fte_cagr_max"]
+    cost_cagr_min = caps["cost_cagr_min"]
+    cost_cagr_max = caps["cost_cagr_max"]
+    fte_cagr_min = caps["fte_cagr_min"]
+    fte_cagr_max = caps["fte_cagr_max"]
     if cost_cagr < cost_cagr_min or cost_cagr > cost_cagr_max:
-        errors.append(ValidationIssue(f"Cost CAGR {cost_cagr:.2%} outside [{cost_cagr_min:.0%}, {cost_cagr_max:.0%}]."))
+        warnings.append(f"Cost CAGR {cost_cagr:.2%} outside [{cost_cagr_min:.0%}, {cost_cagr_max:.0%}].")
     if fte_cagr < fte_cagr_min or fte_cagr > fte_cagr_max:
-        errors.append(ValidationIssue(f"FTE CAGR {fte_cagr:.2%} outside [{fte_cagr_min:.0%}, {fte_cagr_max:.0%}]."))
+        warnings.append(f"FTE CAGR {fte_cagr:.2%} outside [{fte_cagr_min:.0%}, {fte_cagr_max:.0%}].")
 
     # MoM stability clamp (intent-aware)
     pct_changes = scenario["yhat"].astype(float).pct_change().fillna(0.0).abs()
     shock_like = (params.impact_mode == "level" and abs(params.impact_magnitude) >= 0.1) or (params.beta_multiplier and abs(params.beta_multiplier - 1.0) >= 0.1)
-    cap = VALIDATION_CAPS["mom_cap_shock"] if shock_like else VALIDATION_CAPS["mom_cap_default"]
+    cap = caps["mom_cap_shock"] if shock_like else caps["mom_cap_default"]
     if (pct_changes > cap).any():
         clamps.append(ValidationIssue(f"Monthly change exceeded {cap:.0%}; review ramp/timing."))
 
@@ -178,17 +185,24 @@ def validate_and_sanitize_result(params_raw: Dict[str, object], ctx: ValidateCon
     scen_cost_y10 = end_cost
     if base_cost_y10 > 0:
         ratio = scen_cost_y10 / base_cost_y10
-        if ratio < 0.5 or ratio > 2.0:
+        if ratio < caps["baseline_dev_warn_low"] or ratio > caps["baseline_dev_warn_high"]:
             warnings.append(f"Scenario cost deviates from baseline by {ratio:.2f}× at Year-10.")
     base_fte_y10 = float(((baseline["yhat"] - ctx.alpha) / ctx.beta).iloc[-1])
     if base_fte_y10 > 0 and end_fte is not None:
         ratio_fte = end_fte / base_fte_y10
-        if ratio_fte < 0.5 or ratio_fte > 2.0:
+        if ratio_fte < caps["baseline_dev_warn_low"] or ratio_fte > caps["baseline_dev_warn_high"]:
             warnings.append(f"Scenario FTE deviates from baseline by {ratio_fte:.2f}× at Year-10.")
+
+    deduped_warnings = []
+    seen = set()
+    for message in warnings:
+        if message not in seen:
+            seen.add(message)
+            deduped_warnings.append(message)
 
     result = ValidationResult(
         errors=errors,
-        warnings=[ValidationIssue(m) for m in warnings],
+        warnings=[ValidationIssue(m) for m in deduped_warnings],
         clamps=clamps,
     )
     if errors:

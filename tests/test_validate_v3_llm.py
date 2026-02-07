@@ -18,7 +18,7 @@ def test_clamps_extreme_growth_and_returns_warnings():
     assert validated.growth_delta_pp_per_year <= 0.5
 
 
-def test_raises_when_multiplier_out_of_bounds_after_clamp():
+def test_multiplier_out_of_bounds_warns_after_clamp():
     params = {
         "lag_months": 0,
         "onset_duration_months": 0,
@@ -27,7 +27,8 @@ def test_raises_when_multiplier_out_of_bounds_after_clamp():
     }
     tight_ctx = ValidateContext(multiplier_max=0.5, multiplier_min=0.9)
     _, _, result = validate_and_sanitize_result(params, ctx=tight_ctx)
-    assert result.errors
+    assert result.errors == []
+    assert result.warnings
 
 
 def test_invalid_lag_rejected():
