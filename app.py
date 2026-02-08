@@ -1011,6 +1011,11 @@ def _render_app() -> None:
                     "suggestion": suggestion,
                     "usage": llm_result.get("usage"),
                     "raw_excerpt": llm_result.get("raw_excerpt"),
+                    "prompts": llm_result.get("prompts"),
+                    "response_raw": llm_result.get("response"),
+                    "provider": llm_result.get("provider"),
+                    "model": llm_result.get("model"),
+                    "fallback_used": llm_result.get("fallback_used", False),
                 }
                 try:
                     ctx = build_driver_context(observed_t0_cost=last_actual_value, assumptions=DEFAULT_ASSUMPTIONS)
@@ -1223,6 +1228,35 @@ def _render_app() -> None:
             )
         with st.expander("Show 10 sample rows"):
             st.dataframe(series_df.head(10), use_container_width=True)
+        with st.expander("LLM trace (last request)"):
+            payload = st.session_state.get("assistant_v3_payload") or {}
+            prompts = payload.get("prompts") or {}
+            response_raw = payload.get("response_raw")
+            usage = payload.get("usage")
+            raw_excerpt = payload.get("raw_excerpt")
+            provider_used = payload.get("provider", "unknown")
+            model_used = payload.get("model", "unknown")
+            fallback_used = payload.get("fallback_used", False)
+
+            if not prompts and response_raw is None and raw_excerpt is None:
+                st.caption("No assistant request in this session yet.")
+            else:
+                st.caption(
+                    f"Provider: {provider_used} | Model: {model_used} | Fallback used: {'yes' if fallback_used else 'no'}"
+                )
+                if usage:
+                    st.caption(f"Usage: {usage}")
+                if prompts:
+                    with st.expander("System prompt", expanded=False):
+                        st.code(str(prompts.get("system", "")), language="text")
+                    with st.expander("User prompt", expanded=False):
+                        st.code(str(prompts.get("user", "")), language="text")
+                if response_raw is not None:
+                    with st.expander("Response JSON", expanded=False):
+                        st.json(response_raw)
+                elif raw_excerpt:
+                    with st.expander("Raw response excerpt", expanded=False):
+                        st.code(str(raw_excerpt), language="text")
 
 def main() -> None:
     try:
