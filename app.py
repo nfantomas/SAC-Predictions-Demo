@@ -20,6 +20,7 @@ from narrative.scenario_assistant import suggest_scenario
 from llm.provider import LLMError
 from llm.scenario_assistant_v3 import request_suggestion
 from llm.validate_suggestion import SuggestionValidationError
+from llm.validate_v3 import ValidateContext, validate_and_sanitize_result
 from llm.validation_result import summarize_warnings
 from model.cost_driver import calibrate_alpha_beta
 from pipeline.cache import CacheError, load_cache, load_cache_meta_raw
@@ -110,6 +111,17 @@ def _normalize_preset_name(name: str) -> str:
     if name == "baseline":
         return "base"
     return name
+
+
+def _preset_display_name(preset_key: str) -> str:
+    labels = {
+        "freeze_hiring": "Hiring Freeze",
+        "convert_it_contractors": "Convert IT Contractors",
+        "inflation_shock": "Inflation Shock",
+        "outsource_120_uk_cz": "Outsource FTEs to CZ",
+        "reduce_cost_10pct": "Reduce Costs by 10Pct",
+    }
+    return labels.get(preset_key, preset_key.replace("_", " ").title())
 
 
 def _scenario_params_table(params: ScenarioParamsV3) -> pd.DataFrame:
@@ -784,7 +796,7 @@ def _render_app() -> None:
         cols = st.columns(len(preset_keys))
         for idx, key in enumerate(preset_keys):
             preset = PRESETS_V3[key]
-            label = preset.key.replace("_", " ").title()
+            label = _preset_display_name(preset.key)
             btn = cols[idx % len(cols)].button(label, key=f"preset_btn_{key}", use_container_width=True)
             cols[idx % len(cols)].caption(preset.description)
             if btn:
@@ -799,7 +811,7 @@ def _render_app() -> None:
                     horizon_months=len(forecast),
                 )
                 st.session_state["assistant_v3_overlay"] = scenario_df
-                st.session_state["assistant_v3_label"] = f"Scenario preset: {preset.key.replace('_', ' ').title()}"
+                st.session_state["assistant_v3_label"] = f"Scenario preset: {_preset_display_name(preset.key)}"
                 st.session_state["assistant_v3_suggested_driver"] = preset.params.driver or "cost"
                 st.session_state["scenario_params_current"] = preset.params
                 st.session_state["scenario_driver_current"] = preset.params.driver or "cost"
@@ -977,7 +989,7 @@ def _render_app() -> None:
                         st.session_state["assistant_v3_overlay"] = scenario_df
                         st.session_state["assistant_v3_label"] = current_label
                         st.success("Parameters applied. Overlay updated.")
-                        st.experimental_rerun()
+                        st.rerun()
                     except Exception as exc:
                         st.error(f"Could not apply parameters: {exc}")
 
