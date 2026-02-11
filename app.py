@@ -361,7 +361,7 @@ def _render_app() -> None:
     title_suffix = f"{grain_label}" + (f", {title_unit}" if title_unit else "")
 
     st.markdown(
-        f'<div class="app-title">HR Cost & Workforce Forecast</div>',
+        f'<div class="app-title">MOTT HR Cost & Workforce Forecasting</div>',
         unsafe_allow_html=True,
     )
     st.caption(
