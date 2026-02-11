@@ -16,6 +16,58 @@ class DriverContext:
     beta0: float
 
 
+def _annual_to_monthly_rate(annual_delta: float) -> float:
+    # Guard against pathological values that would produce invalid monthly rates.
+    bounded = max(float(annual_delta), -0.99)
+    return (1.0 + bounded) ** (1.0 / 12.0) - 1.0
+
+
+def _interp(shape: str, month_index: int, duration_months: int) -> float:
+    return profile_factor(shape if shape in ("step", "linear", "exp") else "linear", month_index, duration_months)
+
+
+def _apply_growth_over_time(
+    costs: pd.Series,
+    params: ScenarioParamsV3,
+    horizon: int,
+) -> pd.Series:
+    if horizon <= 1:
+        return costs
+
+    start = min(max(params.lag_months, 0), horizon - 1)
+    onset = max(params.onset_duration_months or 0, 0)
+    event_dur = params.event_duration_months
+    recovery = max(params.recovery_duration_months or 0, 0)
+    shape = params.shape if params.shape in ("step", "linear", "exp") else "linear"
+
+    base_ppy = float(params.growth_delta_pp_per_year or 0.0) + float(params.drift_pp_per_year or 0.0)
+    event_ppy = float(params.event_growth_delta_pp_per_year) if params.event_growth_delta_pp_per_year is not None else base_ppy
+    post_ppy = float(params.post_event_growth_pp_per_year) if params.post_event_growth_pp_per_year is not None else base_ppy
+
+    phase_end = min(horizon, start + onset) if onset else start
+    event_end = horizon if not event_dur else min(horizon, phase_end + max(event_dur, 0))
+
+    ppy_path = [0.0] * horizon
+    for i in range(start, horizon):
+        if onset and i < phase_end:
+            p = _interp(shape, i - start, onset)
+            ppy = base_ppy * p
+        elif i < event_end:
+            ppy = event_ppy
+        elif recovery and i < event_end + recovery:
+            p = _interp(shape, i - event_end, recovery)
+            ppy = event_ppy * (1.0 - p) + post_ppy * p
+        else:
+            ppy = post_ppy
+        ppy_path[i] = ppy
+
+    adjusted = costs.copy()
+    for i in range(start + 1, horizon):
+        monthly = _annual_to_monthly_rate(ppy_path[i])
+        adjusted.iloc[i] = max(0.0, adjusted.iloc[i - 1] * (1.0 + monthly))
+    return adjusted
+
+
 def apply_fte_step_or_ramp(fte_series: pd.Series, delta: float, start_idx: int, ramp_months: int) -> pd.Series:
     adjusted = fte_series.copy()
     if ramp_months <= 0:
@@ -147,19 +199,21 @@ def apply_scenario_v3_simple(
         end_event = horizon if not event_dur else min(horizon, start + event_dur)
         for i in range(start, horizon):
             if onset > 0 and i < start + onset:
-                factor = 1.0 + params.impact_magnitude * profile_factor("linear", i - start, onset)
+                factor = 1.0 + params.impact_magnitude * _interp(params.shape, i - start, onset)
             elif i < end_event:
                 factor = 1.0 + params.impact_magnitude
             elif recovery:
                 rec_idx = i - end_event
                 if rec_idx < recovery:
-                    factor = 1.0 + params.impact_magnitude * (1 - profile_factor("linear", rec_idx, recovery))
+                    factor = 1.0 + params.impact_magnitude * (1 - _interp(params.shape, rec_idx, recovery))
                 else:
                     factor = 1.0
             else:
                 factor = 1.0 + params.impact_magnitude
             factors[i] = max(0.0, factor)
         costs = costs * factors
+    elif params.impact_mode == "growth":
+        costs = _apply_growth_over_time(costs, params, horizon)
 
     out = pd.DataFrame({"date": baseline_cost["date"].iloc[:horizon].dt.date.astype(str), "yhat": costs.values})
     out["scenario"] = params.driver or "scenario"

@@ -1,0 +1,27 @@
+{
+  "runs": 5,
+  "questions": 5,
+  "mean_score": 2.0,
+  "score_histogram": {
+    "0": 0,
+    "1": 0,
+    "2": 5,
+    "3": 0
+  },
+  "hard_failures": 0,
+  "hard_failure_pct": 0.0,
+  "mean_latency_ms": 0.0,
+  "top_tags": [
+    {
+      "tag": "clarity",
+      "count": 5
+    }
+  ],
+  "lowest_scoring_ids": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5"
+  ]
+}

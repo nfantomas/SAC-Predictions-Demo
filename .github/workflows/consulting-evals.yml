@@ -1,0 +1,76 @@
+name: Consulting Evals
+
+on:
+  pull_request:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  smoke-evals:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        uses: abatilo/actions-poetry@v3
+        with:
+          poetry-version: "1.8.3"
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      - name: Run smoke evals (stub mode)
+        env:
+          EVALS_SMOKE_MODE: "1"
+        run: poetry run python -m evals.run_consulting_evals --n 1 --out evals/out
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: consulting-evals-smoke
+          path: evals/out/
+
+  nightly-evals:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LLM_PROVIDER: anthropic
+      ANTHROPIC_MODEL: claude-opus-4-20250514
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        uses: abatilo/actions-poetry@v3
+        with:
+          poetry-version: "1.8.3"
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      - name: Run nightly full evals
+        run: poetry run python -m evals.run_consulting_evals --n 1 --out evals/out
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: consulting-evals-nightly
+          path: evals/out/
